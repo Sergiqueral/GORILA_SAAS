@@ -12,44 +12,57 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Flame, ArrowLeft } from 'lucide-react'
 import Navigation from '@/components/Navigation'
-import { signInWithEmailAndPassword } from 'firebase/auth';
 
 export default function SignupPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
 
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (password !== confirmPassword) {
-      alert("Passwords do not match") // TODO: Replace with a more user-friendly error message
+      alert("Passwords do not match")
       return
     }
-    try {
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to register');
+    setIsLoading(true)
+    try {
+      // Registro directo con Firebase Client SDK (Fricción Cero)
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+      const user = userCredential.user
+
+      // Inicializar el perfil del usuario en Firestore
+      try {
+        await setDoc(doc(db, "users", user.uid), {
+          email: user.email,
+          role: "Free User",
+          stripeId: null,
+          subscriptionId: null,
+          subscriptionStatus: null,
+          createdAt: Date.now()
+        })
+      } catch (firestoreError) {
+        console.warn('Could not initialize user in Firestore:', firestoreError)
       }
 
-      const data = await response.json();
-      console.log('User registered successfully:', data);
-
-      // Sign in the user client-side after successful registration
-      await signInWithEmailAndPassword(auth, email, password);
-
       router.push("/dashboard")
-    } catch (error) {
-      console.error('Error signing up', error);
-      alert(error instanceof Error ? error.message : 'An error occurred during registration');
+    } catch (error: any) {
+      console.error('Error signing up', error)
+      let message = 'An error occurred during registration'
+      if (error?.code === 'auth/email-already-in-use') {
+        message = 'This email is already registered. Please sign in instead.'
+      } else if (error?.code === 'auth/weak-password') {
+        message = 'Password should be at least 6 characters.'
+      } else if (error?.code === 'auth/invalid-email') {
+        message = 'Please enter a valid email address.'
+      } else if (error instanceof Error) {
+        message = error.message
+      }
+      alert(message)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -93,7 +106,9 @@ export default function SignupPage() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-4">
-              <Button type="submit" className="w-full bg-[#FF6F61] text-white hover:bg-[#FFB3B0]">Create Account</Button>
+              <Button type="submit" disabled={isLoading} className="w-full bg-[#FF6F61] text-white hover:bg-[#FFB3B0]">
+                {isLoading ? 'Creating Account...' : 'Create Account'}
+              </Button>
               <p className="text-sm text-center">
                 Already have an account?{" "}
                 <Link href="/login" className="text-[#FF6F61] hover:underline">

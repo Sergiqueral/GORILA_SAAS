@@ -9,21 +9,25 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    if (!adminAuth || !firestore) {
+      return NextResponse.json({ role: 'Free User' }, { status: 200 });
+    }
+
     const decodedToken = await adminAuth.verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
     // Get the user's role from Firestore
     const userDoc = await firestore.collection('users').doc(uid).get();
     if (!userDoc.exists) {
-      return NextResponse.json({ role: 'user' }, { status: 200 });
+      return NextResponse.json({ role: 'Free User' }, { status: 200 });
     }
 
     const userData = userDoc.data();
-    const role = userData?.role || 'user';
+    const role = userData?.role || 'Free User';
 
     return NextResponse.json({ role }, { status: 200 });
   } catch (error) {
     console.error('Error fetching user role:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return NextResponse.json({ role: 'Free User' }, { status: 200 });
   }
 }

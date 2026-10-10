@@ -13,6 +13,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    if (!adminAuth || !firestore) {
+      return NextResponse.json({ subscriptionStatus: 'none' }, { status: 200 });
+    }
+
     const decodedToken = await adminAuth.verifyIdToken(idToken);
     const uid = decodedToken.uid;
 
