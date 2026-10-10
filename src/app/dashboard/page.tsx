@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { parseOmnibarInput, ParsedAtom } from "@/lib/omnibarParser";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { Entity360Inspector } from "@/components/Entity360Inspector";
+import { getActiveEntities } from "@/lib/graphEngine";
 import {
   Zap,
   AtSign,
@@ -39,6 +41,7 @@ export default function DashboardPage() {
   const [lastCaptureTime, setLastCaptureTime] = useState<number | null>(null);
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
+  const [inspectingEntity, setInspectingEntity] = useState<string | null>(null);
 
   // Estados de Stripe Checkout
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -145,9 +148,14 @@ export default function DashboardPage() {
     return parseOmnibarInput(inputValue);
   }, [inputValue]);
 
-  // Ejecutar captura ultrarrápida (< 3 segundos)
-  const handleCapture = async () => {
-    const trimmed = inputValue.trim();
+  // Entidades activas calculadas dinámicamente desde el Grafo Atómico
+  const activeEntities = useMemo(() => {
+    return getActiveEntities(atoms, 12);
+  }, [atoms]);
+
+  // Motor central de captura atómica (Omnibarra o Inspector 360°)
+  const captureAtom = async (rawInput: string) => {
+    const trimmed = rawInput.trim();
     if (!trimmed) return;
 
     const startTime = performance.now();
@@ -175,15 +183,9 @@ export default function DashboardPage() {
     // 1. Guardado optimista instantáneo en la UI (< 100ms)
     const updated = [newAtom, ...atoms];
     persistAtoms(updated);
-    setInputValue("");
 
     const duration = Math.round(performance.now() - startTime);
     setLastCaptureTime(duration);
-
-    // Reenfocar la Omnibarra de inmediato para la siguiente captura
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 10);
 
     // 2. Sincronización asíncrona de fondo con Firestore si está conectado
     if (user?.uid) {
@@ -201,6 +203,18 @@ export default function DashboardPage() {
         console.warn("Sincronización en segundo plano pendiente:", err);
       }
     }
+  };
+
+  // Ejecutar captura ultrarrápida desde la Omnibarra (< 3 segundos)
+  const handleCapture = async () => {
+    const textToCapture = inputValue;
+    setInputValue("");
+    await captureAtom(textToCapture);
+
+    // Reenfocar la Omnibarra de inmediato para la siguiente captura
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 10);
   };
 
   // Alternar estado completado de un átomo
@@ -429,7 +443,13 @@ export default function DashboardPage() {
                 </span>
 
                 {liveParse.entities.map((ent) => (
-                  <Badge key={ent} variant="entity" className="gap-1">
+                  <Badge
+                    key={ent}
+                    variant="entity"
+                    className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
+                    onClick={() => setInspectingEntity(ent)}
+                    title={`Ver Contexto 360° de @${ent}`}
+                  >
                     <AtSign className="h-3 w-3" />
                     <span>{ent}</span>
                   </Badge>
@@ -497,6 +517,63 @@ export default function DashboardPage() {
             </div>
           </div>
         </section>
+
+        {/* ============================================================ */}
+        {/* GRAFO ATÓMICO: ENTIDADES VIVAS (FRICCIÓN CERO)               */}
+        {/* ============================================================ */}
+        {activeEntities.length > 0 && (
+          <section
+            className={`p-4 rounded-xl border transition-all ${
+              outdoorMode
+                ? "border-2 border-black bg-zinc-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]"
+                : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/40"
+            }`}
+          >
+            <div className="flex items-center justify-between mb-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] uppercase tracking-wider font-mono font-bold text-zinc-500 dark:text-zinc-400 flex items-center gap-1.5">
+                  <AtSign className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                  Grafo Vivo • Entidades Vinculadas ({activeEntities.length})
+                </span>
+              </div>
+              <span className="text-[10px] text-zinc-400 font-mono hidden sm:inline">
+                Clic para abrir el Contexto 360° de la entidad
+              </span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {activeEntities.map((ent) => (
+                <button
+                  key={ent.id}
+                  type="button"
+                  onClick={() => setInspectingEntity(ent.id)}
+                  className={`group px-3 py-1.5 rounded-lg border text-xs font-mono transition-all flex items-center gap-2 ${
+                    outdoorMode
+                      ? "border-black bg-white hover:bg-black hover:text-white"
+                      : "border-purple-200 dark:border-purple-800/60 bg-purple-50/70 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60 shadow-xs"
+                  }`}
+                  title={`Abrir vista 360° de ${ent.name}`}
+                >
+                  <span className="font-bold">{ent.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full ${
+                      outdoorMode
+                        ? "bg-black text-white group-hover:bg-white group-hover:text-black"
+                        : "bg-purple-200/80 dark:bg-purple-900 text-purple-900 dark:text-purple-200"
+                    }`}
+                  >
+                    {ent.atomCount}
+                  </span>
+                  {ent.pendingCount > 0 ? (
+                    <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" title={`${ent.pendingCount} pendientes`} />
+                  ) : (
+                    <span className="h-2 w-2 rounded-full bg-emerald-500" title="100% completado" />
+                  )}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* ============================================================ */}
         {/* FEED DE ÁTOMOS CAPTURADOS (REGISTRO MECÁNICO)               */}
@@ -594,7 +671,8 @@ export default function DashboardPage() {
                           key={ent}
                           variant="entity"
                           className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
-                          onClick={() => setSelectedEntity(selectedEntity === ent ? null : ent)}
+                          onClick={() => setInspectingEntity(ent)}
+                          title={`Abrir Contexto 360° de @${ent}`}
                         >
                           <AtSign className="h-3 w-3" />
                           <span>{ent}</span>
@@ -640,6 +718,21 @@ export default function DashboardPage() {
             </div>
           )}
         </section>
+
+        {/* ============================================================ */}
+        {/* INSPECTOR 360° DE LA ENTIDAD (EL GRAFO ATÓMICO DEL CODEX)    */}
+        {/* ============================================================ */}
+        <Entity360Inspector
+          isOpen={!!inspectingEntity}
+          entityKey={inspectingEntity}
+          atoms={atoms}
+          outdoorMode={outdoorMode}
+          onClose={() => setInspectingEntity(null)}
+          onToggleComplete={toggleComplete}
+          onDeleteAtom={deleteAtom}
+          onCaptureForEntity={captureAtom}
+          onSelectEntity={(nextKey) => setInspectingEntity(nextKey)}
+        />
 
       </div>
     </div>
