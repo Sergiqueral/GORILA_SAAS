@@ -119,11 +119,15 @@ export default function DashboardPage() {
   const handleCheckout = async () => {
     setIsCheckingOut(true);
     try {
+      const tenantId = tenant?.id || (user?.uid ? `tenant_${user.uid}` : "tenant_default");
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          tenantId,
           metadata: {
+            tenant_id: tenantId,
+            tenantId,
             userId: user?.uid || "anon",
             userEmail: user?.email || "operario@gorila.saas",
           },

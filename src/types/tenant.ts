@@ -1,5 +1,29 @@
 export type TenantRole = 'owner' | 'admin' | 'operator' | 'viewer';
 export type MemberStatus = 'active' | 'pending';
+export type SubscriptionStatus =
+  | 'active'
+  | 'past_due'
+  | 'canceled'
+  | 'trialing'
+  | 'unpaid'
+  | 'incomplete'
+  | 'incomplete_expired'
+  | 'paused';
+
+export interface TenantSubscription {
+  id: string; // stripe_subscription_id
+  customerId: string; // stripe_customer_id
+  status: SubscriptionStatus;
+  planId?: string;
+  planName?: string;
+  priceAmount?: number;
+  currency?: string;
+  currentPeriodStart?: number | null;
+  currentPeriodEnd?: number | null;
+  cancelAtPeriodEnd?: boolean;
+  canceledAt?: number | null;
+  updatedAt: number;
+}
 
 export interface TenantMember {
   id: string; // member Auth UID or unique invite identifier
@@ -17,6 +41,11 @@ export interface Tenant {
   ownerId: string;
   slug?: string;
   plan?: string;
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
+  subscription?: TenantSubscription | null;
   cif?: string;
   email?: string;
   phone?: string;
