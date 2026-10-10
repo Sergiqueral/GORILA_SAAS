@@ -9,6 +9,7 @@ import { TenantRole } from "@/types/tenant";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { TeamManagement } from "@/components/TeamManagement";
 import {
   ArrowLeft,
   Building2,
@@ -54,9 +55,6 @@ export default function ClientSettingsDashboard() {
     bootstrapTenant,
     updateTenant,
     updateUserProfile,
-    inviteMember,
-    updateMemberRole,
-    removeMember,
   } = useTenant();
 
   const [activeTab, setActiveTab] = useState<ActiveTab>("profile");
@@ -78,11 +76,6 @@ export default function ClientSettingsDashboard() {
   const [address, setAddress] = useState("");
   const [isSavingCompany, setIsSavingCompany] = useState(false);
 
-  // Formulario Invitación de Miembro
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<TenantRole>("operator");
-  const [inviteName, setInviteName] = useState("");
-  const [isInviting, setIsInviting] = useState(false);
 
   // Inicializar estados locales cuando los datos carguen
   useEffect(() => {
@@ -172,105 +165,7 @@ export default function ClientSettingsDashboard() {
     }
   };
 
-  // Enviar invitación a nuevo usuario
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inviteEmail.trim() || !inviteEmail.includes("@")) {
-      showToast("error", "Introduce un correo electrónico válido");
-      return;
-    }
 
-    setIsInviting(true);
-    try {
-      await inviteMember(inviteEmail, inviteRole, inviteName);
-      setInviteEmail("");
-      setInviteName("");
-      showToast("success", `Invitación enviada a ${inviteEmail} con rol ${getRoleLabel(inviteRole)}`);
-    } catch (err: any) {
-      showToast("error", err?.message || "Error al enviar invitación");
-    } finally {
-      setIsInviting(false);
-    }
-  };
-
-  // Cambiar rol de miembro
-  const handleRoleChange = async (memberId: string, newRole: TenantRole) => {
-    try {
-      await updateMemberRole(memberId, newRole);
-      showToast("success", "Rol del miembro actualizado");
-    } catch (err: any) {
-      showToast("error", err?.message || "No se pudo actualizar el rol");
-    }
-  };
-
-  // Eliminar miembro
-  const handleRemoveMember = async (memberId: string, memberEmail: string) => {
-    if (!confirm(`¿Eliminar al miembro ${memberEmail} de la organización?`)) return;
-    try {
-      await removeMember(memberId);
-      showToast("success", `Miembro ${memberEmail} revocado`);
-    } catch (err: any) {
-      showToast("error", err?.message || "No se pudo eliminar el miembro");
-    }
-  };
-
-  const getRoleBadge = (role: TenantRole) => {
-    switch (role) {
-      case "owner":
-        return (
-          <Badge
-            variant="default"
-            className="bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700/60 gap-1 font-mono text-[11px]"
-          >
-            <Crown className="h-3 w-3 text-amber-500" />
-            <span>Propietario</span>
-          </Badge>
-        );
-      case "admin":
-        return (
-          <Badge
-            variant="default"
-            className="bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-700/60 gap-1 font-mono text-[11px]"
-          >
-            <Shield className="h-3 w-3 text-blue-500" />
-            <span>Administrador</span>
-          </Badge>
-        );
-      case "operator":
-        return (
-          <Badge
-            variant="default"
-            className="bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700/60 gap-1 font-mono text-[11px]"
-          >
-            <Zap className="h-3 w-3 text-emerald-500" />
-            <span>Operario de Campo</span>
-          </Badge>
-        );
-      case "viewer":
-        return (
-          <Badge
-            variant="default"
-            className="bg-zinc-500/20 text-zinc-700 dark:text-zinc-300 border-zinc-300 dark:border-zinc-700/60 gap-1 font-mono text-[11px]"
-          >
-            <Eye className="h-3 w-3 text-zinc-500" />
-            <span>Visualizador</span>
-          </Badge>
-        );
-    }
-  };
-
-  const getRoleLabel = (role: TenantRole) => {
-    switch (role) {
-      case "owner":
-        return "Propietario (Acceso Total + Facturación)";
-      case "admin":
-        return "Administrador (Gestión de Empresa y Equipo)";
-      case "operator":
-        return "Operario de Campo (Captura Atómica en Terreno)";
-      case "viewer":
-        return "Visualizador (Solo Lectura)";
-    }
-  };
 
   if (authLoading || tenantLoading) {
     return (
@@ -728,165 +623,10 @@ export default function ClientSettingsDashboard() {
         {/* PESTAÑA 3: EQUIPO E INVITACIONES                            */}
         {/* ============================================================ */}
         {activeTab === "team" && (
-          <section className="space-y-6">
-            {/* OMNIBARRA DE INVITACIÓN RÁPIDA (< 3 SEGUNDOS) */}
-            {isAdmin && (
-              <div
-                className={`p-5 rounded-2xl border transition-all ${
-                  outdoorMode
-                    ? "border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
-                    : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm"
-                }`}
-              >
-                <h3 className="text-sm font-bold font-mono tracking-tight mb-3 flex items-center gap-2">
-                  <Plus className="h-4 w-4 text-emerald-500" />
-                  <span>Invitar a Nuevo Miembro al Equipo</span>
-                </h3>
-
-                <form onSubmit={handleInvite} className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
-                  <div className="flex-1">
-                    <Input
-                      type="email"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      placeholder="operario@empresa.com"
-                      className={`font-mono text-sm ${outdoorMode ? "border-2 border-black" : ""}`}
-                      required
-                    />
-                  </div>
-
-                  <div className="sm:w-48">
-                    <Input
-                      type="text"
-                      value={inviteName}
-                      onChange={(e) => setInviteName(e.target.value)}
-                      placeholder="Nombre (opcional)"
-                      className={`font-mono text-sm ${outdoorMode ? "border-2 border-black" : ""}`}
-                    />
-                  </div>
-
-                  <div className="sm:w-56">
-                    <select
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value as TenantRole)}
-                      className={`w-full h-10 px-3 rounded-lg text-xs font-mono font-semibold border bg-white dark:bg-zinc-900 ${
-                        outdoorMode ? "border-2 border-black" : "border-zinc-300 dark:border-zinc-700"
-                      }`}
-                    >
-                      <option value="operator">⚡ Operario de Campo</option>
-                      <option value="admin">🛡️ Administrador</option>
-                      <option value="viewer">👁️ Visualizador</option>
-                    </select>
-                  </div>
-
-                  <Button
-                    type="submit"
-                    disabled={isInviting || !inviteEmail.trim()}
-                    className={`gap-1.5 font-mono font-bold text-xs shrink-0 ${
-                      outdoorMode
-                        ? "bg-black text-white hover:bg-zinc-800 border-2 border-black"
-                        : "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                    }`}
-                  >
-                    {isInviting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-                    <span>Enviar Invitación</span>
-                  </Button>
-                </form>
-              </div>
-            )}
-
-            {/* LISTADO DE MIEMBROS ACTIVOS Y PENDIENTES */}
-            <div
-              className={`rounded-2xl border overflow-hidden transition-all ${
-                outdoorMode
-                  ? "border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
-                  : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm"
-              }`}
-            >
-              <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-sm tracking-tight">Miembros de la Organización</h3>
-                  <Badge variant="outline" className="font-mono text-xs">
-                    {members.length} usuarios
-                  </Badge>
-                </div>
-              </div>
-
-              <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                {members.map((member) => (
-                  <div
-                    key={member.id}
-                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`h-10 w-10 rounded-xl flex items-center justify-center font-mono font-bold text-sm ${
-                          outdoorMode
-                            ? "bg-black text-white"
-                            : "bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
-                        }`}
-                      >
-                        {member.displayName?.charAt(0).toUpperCase() || member.email.charAt(0).toUpperCase()}
-                      </div>
-
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-sm">
-                            {member.displayName || member.email.split("@")[0]}
-                          </span>
-                          {member.id === user?.uid && (
-                            <Badge variant="tag" className="text-[10px] py-0 px-1.5">
-                              Tú
-                            </Badge>
-                          )}
-                          {member.status === "pending" && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] font-mono border-amber-400 text-amber-600 dark:text-amber-400 py-0"
-                            >
-                              Pendiente
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-xs text-zinc-500 font-mono">{member.email}</p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 self-end sm:self-auto">
-                      {/* Insignia o Selector de Rol */}
-                      {isAdmin && member.role !== "owner" && member.id !== user?.uid ? (
-                        <select
-                          value={member.role}
-                          onChange={(e) => handleRoleChange(member.id, e.target.value as TenantRole)}
-                          className={`h-8 px-2.5 rounded-lg text-xs font-mono font-semibold border bg-white dark:bg-zinc-900 ${
-                            outdoorMode ? "border-2 border-black" : "border-zinc-300 dark:border-zinc-700"
-                          }`}
-                        >
-                          <option value="operator">⚡ Operario</option>
-                          <option value="admin">🛡️ Administrador</option>
-                          <option value="viewer">👁️ Visualizador</option>
-                        </select>
-                      ) : (
-                        getRoleBadge(member.role)
-                      )}
-
-                      {/* Botón de Revocar / Eliminar */}
-                      {isAdmin && member.role !== "owner" && member.id !== user?.uid && (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMember(member.id, member.email)}
-                          className="p-1.5 text-zinc-400 hover:text-rose-600 transition-colors rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                          title="Eliminar de la organización"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
+          <TeamManagement
+            outdoorMode={outdoorMode}
+            onToast={showToast}
+          />
         )}
 
         {/* ============================================================ */}
