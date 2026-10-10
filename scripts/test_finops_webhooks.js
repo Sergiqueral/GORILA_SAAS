@@ -1,6 +1,6 @@
 const Stripe = require('stripe');
 
-// Script de verificación para los 3 pilares de FinOps
+// Script de verificación para los 3 pilares de FinOps del Gorila Codex
 async function testFinOpsWebhookRules() {
   console.log("===============================================================================");
   console.log("          VALIDACIÓN E2E: FINOPS STRIPE WEBHOOKS & SOVEREIGNTY MAPPING         ");
@@ -10,6 +10,7 @@ async function testFinOpsWebhookRules() {
     apiVersion: '2024-06-20',
   });
   const webhookSecret = 'whsec_test_secret_blindaje_998877';
+  const ADDITIONAL_SEAT_PRICE_ID = 'price_1UP8klLDAGQuuEjm755xMMmm';
 
   // ---------------------------------------------------------------------------
   // 1. REGLA 1: FIRMA CRIPTOGRÁFICA (EL BLINDAJE)
@@ -29,7 +30,7 @@ async function testFinOpsWebhookRules() {
     stripe.webhooks.constructEvent(rawPayload, fakeSig, webhookSecret);
   } catch (err) {
     rejectedAdulterated = true;
-    console.log(`[Blindaje Test B] Petición con firma adulterada: Capturado error "${err.message}". Rechazada HTTP 400? -> PASS (HTTP 400)`);
+    console.log(`[Blindaje Test B] Petición con firma adulterada: Capturado error. Rechazada HTTP 400? -> PASS (HTTP 400)`);
   }
 
   // Caso C: Firma válida generada criptográficamente con el secreto
@@ -67,10 +68,12 @@ async function testFinOpsWebhookRules() {
     data: {
       object: {
         id: "cs_test_session_123",
+        client_reference_id: sampleTenantId,
         customer: sampleCustomerId,
         subscription: sampleSubscriptionId,
         metadata: {
           tenant_id: sampleTenantId,
+          additionalSeats: "3",
           userId: "usr_sergi_admin",
         },
       },
@@ -78,28 +81,38 @@ async function testFinOpsWebhookRules() {
   };
 
   const sessionObj = checkoutSessionPayload.data.object;
-  const extractedTenantId = sessionObj.metadata.tenant_id;
+  const extractedTenantId = sessionObj.client_reference_id || sessionObj.metadata.tenant_id;
   const extractedCustomer = sessionObj.customer;
   const extractedSubscription = sessionObj.subscription;
+  const extractedSeats = parseInt(sessionObj.metadata.additionalSeats, 10);
 
-  console.log(`[Soberanía] Extracción de metadata: tenant_id = "${extractedTenantId}"`);
+  console.log(`[Soberanía] Extracción de client_reference_id / metadata: tenant_id = "${extractedTenantId}"`);
   console.log(`[Soberanía] stripe_customer_id = "${extractedCustomer}"`);
   console.log(`[Soberanía] stripe_subscription_id = "${extractedSubscription}"`);
+  console.log(`[Soberanía] additionalSeats = ${extractedSeats}`);
 
-  // Estructura que se persiste en tenants/{tenantId}
   const tenantDocumentUpdate = {
     stripe_customer_id: extractedCustomer,
     stripe_subscription_id: extractedSubscription,
     stripeCustomerId: extractedCustomer,
     stripeSubscriptionId: extractedSubscription,
     plan: "Pro",
+    subscription: {
+      status: "active",
+      stripeCustomerId: extractedCustomer,
+      stripeSubscriptionId: extractedSubscription,
+      planPriceId: ADDITIONAL_SEAT_PRICE_ID,
+      additionalSeats: extractedSeats,
+      currentPeriodEnd: 1794262000000,
+    },
     updatedAt: Date.now(),
   };
 
   const sovereigntyPassed =
     extractedTenantId === sampleTenantId &&
-    tenantDocumentUpdate.stripe_customer_id === sampleCustomerId &&
-    tenantDocumentUpdate.stripe_subscription_id === sampleSubscriptionId &&
+    tenantDocumentUpdate.stripeCustomerId === sampleCustomerId &&
+    tenantDocumentUpdate.stripeSubscriptionId === sampleSubscriptionId &&
+    tenantDocumentUpdate.subscription.additionalSeats === 3 &&
     tenantDocumentUpdate.plan === "Pro";
 
   if (sovereigntyPassed) {
@@ -114,7 +127,7 @@ async function testFinOpsWebhookRules() {
   // ---------------------------------------------------------------------------
   console.log("\n>>> REGLA 3: CICLO DE VIDA REACTIVO");
 
-  const testSubscriptionLifecycle = (eventStatus, expectedEffectivePlan) => {
+  const testSubscriptionLifecycle = (eventStatus, expectedEffectivePlan, seatCount) => {
     const subEvent = {
       id: "evt_sub_lifecycle_" + eventStatus,
       type: eventStatus === "canceled" ? "customer.subscription.deleted" : "customer.subscription.updated",
@@ -135,6 +148,15 @@ async function testFinOpsWebhookRules() {
                   unit_amount: 2900,
                   currency: "eur",
                 },
+                quantity: 1,
+              },
+              {
+                price: {
+                  id: ADDITIONAL_SEAT_PRICE_ID,
+                  unit_amount: 1000,
+                  currency: "eur",
+                },
+                quantity: seatCount,
               },
             ],
           },
@@ -149,16 +171,33 @@ async function testFinOpsWebhookRules() {
     const isPlanActive = sub.status === 'active' || sub.status === 'trialing';
     const effectivePlan = isPlanActive ? 'Pro' : 'Free';
 
+    let resolvedSeats = 0;
+    let resolvedPlanPriceId = '';
+    for (const item of sub.items.data) {
+      if (item.price.id === ADDITIONAL_SEAT_PRICE_ID) {
+        resolvedSeats += item.quantity;
+      } else {
+        resolvedPlanPriceId = item.price.id;
+      }
+    }
+
+    if (eventStatus === 'canceled') {
+      resolvedSeats = 0;
+    }
+
     const subscriptionNode = {
+      status: sub.status,
+      stripeCustomerId: sub.customer,
+      stripeSubscriptionId: sub.id,
+      planPriceId: resolvedPlanPriceId || ADDITIONAL_SEAT_PRICE_ID,
+      additionalSeats: resolvedSeats,
+      currentPeriodEnd: sub.current_period_end * 1000,
       id: sub.id,
       customerId: sub.customer,
-      status: sub.status,
-      planId: sub.items.data[0].price.id,
-      planName: "Gorila Cockpit Pro",
+      planName: isPlanActive ? "Gorila Cockpit Pro" : "Free Tier",
       priceAmount: sub.items.data[0].price.unit_amount,
       currency: sub.items.data[0].price.currency,
       currentPeriodStart: sub.current_period_start * 1000,
-      currentPeriodEnd: sub.current_period_end * 1000,
       cancelAtPeriodEnd: sub.cancel_at_period_end,
       canceledAt: sub.canceled_at ? sub.canceled_at * 1000 : null,
       updatedAt: Date.now(),
@@ -173,16 +212,16 @@ async function testFinOpsWebhookRules() {
       updatedAt: Date.now(),
     };
 
-    console.log(`[Ciclo de Vida: Estado "${eventStatus}"]`);
+    console.log(`[Ciclo de Vida: Estado "${eventStatus}" | Asientos: ${resolvedSeats}]`);
     console.log(` - Plan efectivo resultante: "${effectivePlan}" (Esperado: "${expectedEffectivePlan}")`);
     console.log(` - Nodo subscription:`, JSON.stringify(subscriptionNode, null, 2));
 
     return effectivePlan === expectedEffectivePlan && subscriptionNode.status === eventStatus;
   };
 
-  const activeOk = testSubscriptionLifecycle("active", "Pro");
-  const pastDueOk = testSubscriptionLifecycle("past_due", "Free");
-  const canceledOk = testSubscriptionLifecycle("canceled", "Free");
+  const activeOk = testSubscriptionLifecycle("active", "Pro", 5);
+  const pastDueOk = testSubscriptionLifecycle("past_due", "Free", 5);
+  const canceledOk = testSubscriptionLifecycle("canceled", "Free", 0);
 
   if (activeOk && pastDueOk && canceledOk) {
     console.log("  >>> REGLA 3 SUPERADA EXITOSAMENTE: Ciclo de vida reactivo en tiempo real validado.");

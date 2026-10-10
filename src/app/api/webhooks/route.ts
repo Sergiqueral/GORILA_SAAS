@@ -52,11 +52,13 @@ export async function POST(req: NextRequest) {
   try {
     switch (event.type) {
       // -----------------------------------------------------------------------
+      // -----------------------------------------------------------------------
       // 2. REGLA 2: MAPEO DE SOBERANÍA (checkout.session.completed)
       // -----------------------------------------------------------------------
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
         const tenantId =
+          session.client_reference_id ||
           session.metadata?.tenant_id ||
           session.metadata?.tenantId;
         const customerId = session.customer as string;
@@ -69,6 +71,42 @@ export async function POST(req: NextRequest) {
 
         if (tenantId && firestore) {
           const tenantRef = firestore.collection('tenants').doc(tenantId);
+
+          let additionalSeats = parseInt(session.metadata?.additionalSeats || '0', 10) || 0;
+          let currentPeriodEnd = Date.now() + 30 * 24 * 60 * 60 * 1000;
+          let planPriceId = 'price_1UP8klLDAGQuuEjm755xMMmm';
+
+          if (subscriptionId) {
+            try {
+              const sub = await stripe.subscriptions.retrieve(subscriptionId);
+              if (sub.current_period_end) {
+                currentPeriodEnd = sub.current_period_end * 1000;
+              }
+              for (const item of sub.items?.data || []) {
+                if (item.price?.id === 'price_1UP8klLDAGQuuEjm755xMMmm' || item.price?.product === 'prod_VPyi482oBvWxcO') {
+                  additionalSeats = Math.max(additionalSeats, item.quantity || 0);
+                } else if (!planPriceId) {
+                  planPriceId = item.price?.id || planPriceId;
+                }
+              }
+            } catch (subErr) {
+              console.warn('[FinOps Soberanía] Aviso recuperando suscripción desde Stripe:', subErr);
+            }
+          }
+
+          const subscriptionData: TenantSubscription = {
+            status: 'active',
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+            planPriceId: planPriceId,
+            additionalSeats: additionalSeats,
+            currentPeriodEnd: currentPeriodEnd,
+            id: subscriptionId,
+            customerId: customerId,
+            planName: 'Gorila Cockpit Pro',
+            updatedAt: Date.now(),
+          };
+
           await tenantRef.set(
             {
               stripe_customer_id: customerId,
@@ -76,16 +114,17 @@ export async function POST(req: NextRequest) {
               stripeCustomerId: customerId,
               stripeSubscriptionId: subscriptionId,
               plan: 'Pro',
+              subscription: subscriptionData,
               updatedAt: Date.now(),
             },
             { merge: true }
           );
           console.log(
-            `[FinOps Soberanía] Espacio de trabajo ${tenantId} blindado y vinculado exitosamente con Stripe (Customer: ${customerId}, Sub: ${subscriptionId})`
+            `[FinOps Soberanía] Espacio de trabajo ${tenantId} blindado y vinculado con Stripe (Seats: ${additionalSeats})`
           );
         } else {
           console.warn(
-            `[FinOps Soberanía] Advertencia: tenant_id ausente en metadata de sesión o Firestore indisponible (tenantId: ${tenantId})`
+            `[FinOps Soberanía] Advertencia: tenant_id ausente en metadata/client_reference_id o Firestore indisponible (tenantId: ${tenantId})`
           );
         }
 
@@ -112,8 +151,7 @@ export async function POST(req: NextRequest) {
       // 3. REGLA 3: CICLO DE VIDA REACTIVO (subscription.created/updated/deleted)
       // -----------------------------------------------------------------------
       case 'customer.subscription.created':
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': {
+      case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
         let tenantId =
           subscription.metadata?.tenant_id ||
@@ -154,23 +192,50 @@ export async function POST(req: NextRequest) {
           if (tenantId) {
             const tenantRef = firestore.collection('tenants').doc(tenantId);
 
-            // Construir el nuevo nodo reactivo 'subscription'
+            // Calcular asientos adicionales contratados y el ID del precio base
+            const ADDITIONAL_SEAT_PRICE_ID = 'price_1UP8klLDAGQuuEjm755xMMmm';
+            let additionalSeats = 0;
+            let planPriceId = '';
+
+            for (const item of subscription.items?.data || []) {
+              const priceId = item.price?.id;
+              if (priceId === ADDITIONAL_SEAT_PRICE_ID || item.price?.product === 'prod_VPyi482oBvWxcO') {
+                additionalSeats += (item.quantity || 0);
+              } else if (!planPriceId) {
+                planPriceId = priceId || '';
+              }
+            }
+
+            if (additionalSeats === 0 && subscription.metadata?.additionalSeats) {
+              additionalSeats = parseInt(subscription.metadata.additionalSeats, 10) || 0;
+            }
+
+            if (!planPriceId && subscription.items?.data?.[0]?.price?.id) {
+              planPriceId = subscription.items.data[0].price.id;
+            }
+
+            const currentPeriodEnd = subscription.current_period_end
+              ? subscription.current_period_end * 1000
+              : Date.now() + 30 * 24 * 60 * 60 * 1000;
+
             const isPlanActive = status === 'active' || status === 'trialing';
             const effectivePlan = isPlanActive ? 'Pro' : 'Free';
 
             const subscriptionData: TenantSubscription = {
+              status: status,
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscription.id,
+              planPriceId: planPriceId || ADDITIONAL_SEAT_PRICE_ID,
+              additionalSeats: additionalSeats,
+              currentPeriodEnd: currentPeriodEnd,
               id: subscription.id,
               customerId: customerId,
-              status: status,
-              planId: subscription.items?.data?.[0]?.price?.id || 'pro_plan',
+              planId: planPriceId,
               planName: 'Gorila Cockpit Pro',
               priceAmount: subscription.items?.data?.[0]?.price?.unit_amount || 2900,
               currency: subscription.items?.data?.[0]?.price?.currency || 'eur',
               currentPeriodStart: subscription.current_period_start
                 ? subscription.current_period_start * 1000
-                : null,
-              currentPeriodEnd: subscription.current_period_end
-                ? subscription.current_period_end * 1000
                 : null,
               cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
               canceledAt: subscription.canceled_at
@@ -184,6 +249,8 @@ export async function POST(req: NextRequest) {
                 plan: effectivePlan,
                 stripe_customer_id: customerId,
                 stripe_subscription_id: subscription.id,
+                stripeCustomerId: customerId,
+                stripeSubscriptionId: subscription.id,
                 subscription: subscriptionData,
                 updatedAt: Date.now(),
               },
@@ -191,7 +258,7 @@ export async function POST(req: NextRequest) {
             );
 
             console.log(
-              `[FinOps Ciclo de Vida] Nodo subscription actualizado para Tenant ${tenantId}: estado=${status}, plan=${effectivePlan}`
+              `[FinOps Ciclo de Vida] Nodo subscription actualizado para Tenant ${tenantId}: estado=${status}, plan=${effectivePlan}, seats=${additionalSeats}`
             );
           } else {
             console.warn(
@@ -215,8 +282,64 @@ export async function POST(req: NextRequest) {
               { merge: true }
             );
           }
-        } else {
-          console.error('[FinOps Ciclo de Vida] Error: Firestore admin no disponible para persistir estado');
+        }
+        break;
+      }
+
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        let tenantId =
+          subscription.metadata?.tenant_id ||
+          subscription.metadata?.tenantId;
+        const customerId = subscription.customer as string;
+
+        console.log(
+          `[FinOps Ciclo de Vida] customer.subscription.deleted para suscripción: ${subscription.id}`
+        );
+
+        if (firestore) {
+          if (!tenantId) {
+            const snapBySub = await firestore
+              .collection('tenants')
+              .where('stripe_subscription_id', '==', subscription.id)
+              .limit(1)
+              .get();
+
+            if (!snapBySub.empty) {
+              tenantId = snapBySub.docs[0].id;
+            }
+          }
+
+          if (tenantId) {
+            const tenantRef = firestore.collection('tenants').doc(tenantId);
+            const subscriptionData: TenantSubscription = {
+              status: 'canceled',
+              stripeCustomerId: customerId,
+              stripeSubscriptionId: subscription.id,
+              planPriceId: subscription.items?.data?.[0]?.price?.id || 'price_1UP8klLDAGQuuEjm755xMMmm',
+              additionalSeats: 0,
+              currentPeriodEnd: subscription.ended_at ? subscription.ended_at * 1000 : Date.now(),
+              id: subscription.id,
+              customerId: customerId,
+              planName: 'Free Tier',
+              cancelAtPeriodEnd: true,
+              canceledAt: Date.now(),
+              updatedAt: Date.now(),
+            };
+
+            await tenantRef.set(
+              {
+                plan: 'Free',
+                subscription: subscriptionData,
+                updatedAt: Date.now(),
+              },
+              { merge: true }
+            );
+
+            console.log(
+              `[FinOps Ciclo de Vida] Tenant ${tenantId} degradado a Free Tier por cancelación de suscripción`
+            );
+          }
         }
         break;
       }

@@ -11,18 +11,23 @@ export type SubscriptionStatus =
   | 'paused';
 
 export interface TenantSubscription {
-  id: string; // stripe_subscription_id
-  customerId: string; // stripe_customer_id
   status: SubscriptionStatus;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string;
+  planPriceId: string;        // Ej: price_1UP8klLDAGQuuEjm755xMMmm
+  additionalSeats: number;    // Cantidad de "Usuarios adicionales" contratados
+  currentPeriodEnd: number;   // Timestamp de renovación/caducidad
+  // Campos complementarios del Gorila Codex para FinOps
+  id?: string;                // stripe_subscription_id
+  customerId?: string;        // stripe_customer_id
   planId?: string;
   planName?: string;
   priceAmount?: number;
   currency?: string;
   currentPeriodStart?: number | null;
-  currentPeriodEnd?: number | null;
   cancelAtPeriodEnd?: boolean;
   canceledAt?: number | null;
-  updatedAt: number;
+  updatedAt?: number;
 }
 
 export interface TenantMember {
