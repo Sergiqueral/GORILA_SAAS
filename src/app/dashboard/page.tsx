@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useAuth } from "@/hooks/useAuth";
+import { useTenant } from "@/hooks/useTenant";
 import { auth, db } from "@/firebase/config";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, useMemo } from "react";
@@ -31,10 +33,13 @@ import {
   Loader2,
   CalendarDays,
   ListOrdered,
+  Building2,
+  Settings,
 } from "lucide-react";
 
 export default function DashboardPage() {
   const { user, loading } = useAuth();
+  const { tenant, currentRole } = useTenant();
   const router = useRouter();
 
   // Estados de la Omnibarra
@@ -351,12 +356,39 @@ export default function DashboardPage() {
                 </span>
               )}
             </div>
-            <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 mt-2 font-mono">
-              Operario: <span className="font-medium text-zinc-700 dark:text-zinc-300">{user?.email}</span>
+            <p className="text-xs sm:text-sm text-zinc-500 dark:text-zinc-400 mt-2 font-mono flex flex-wrap items-center gap-1.5">
+              <span>Operario: <span className="font-medium text-zinc-700 dark:text-zinc-300">{user?.email}</span></span>
+              {tenant && (
+                <span className="inline-flex items-center gap-1 text-zinc-400">
+                  • <Building2 className="h-3 w-3 text-zinc-500" />
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">{tenant.name}</span>
+                  <Badge variant="outline" className="text-[10px] py-0 px-1 font-mono uppercase">
+                    {currentRole}
+                  </Badge>
+                </span>
+              )}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
+            {/* Gestión de Empresa & Perfil */}
+            <Link href="/dashboard/settings">
+              <Button
+                variant="outline"
+                size="sm"
+                className={`gap-1.5 text-xs font-mono font-semibold transition-all ${
+                  outdoorMode
+                    ? "bg-white text-black border-2 border-black hover:bg-zinc-100 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                    : "border-zinc-300 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/60"
+                }`}
+                title="Configuración de Perfil, Empresa, Equipo y Permisos"
+              >
+                <Building2 className="h-3.5 w-3.5 text-blue-500" />
+                <span className="hidden md:inline">{tenant?.name || "Empresa"} • </span>
+                <span>Ajustes</span>
+              </Button>
+            </Link>
+
             {/* Botón Stripe Checkout */}
             <Button
               variant="outline"
