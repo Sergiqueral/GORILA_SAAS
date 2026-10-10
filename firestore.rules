@@ -29,6 +29,7 @@ rules_version = '2';
 //   - displayName: string (optional, max 100 chars)
 //   - photoURL: string (optional, max 500 chars, valid URL)
 //   - role: string (optional, max 50 chars, default 'Free User', client cannot escalate)
+//   - tenantId: string (optional, 1..100 chars, active workspace/tenant reference)
 //   - stripeId: string | null (optional, max 100 chars, managed by server)
 //   - stripeCustomerId: string | null (optional, max 100 chars, managed by server)
 //   - subscriptionId: string | null (optional, max 100 chars, managed by server)
@@ -56,6 +57,10 @@ rules_version = '2';
 //   - ownerId: string (required, 1..128 chars, owner Auth UID, immutable)
 //   - slug: string (optional, 1..100 chars) - URL/Workspace slug
 //   - plan: string (optional, max 50 chars) - Organization plan
+//   - cif: string (optional, max 30 chars) - Fiscal / Tax ID
+//   - email: string (optional, max 100 chars) - Organization email
+//   - phone: string (optional, max 30 chars) - Organization phone
+//   - address: string (optional, max 200 chars) - Organization address
 //   - createdAt: timestamp | number (required, immutable)
 //   - updatedAt: timestamp | number (optional)
 //
@@ -65,6 +70,7 @@ rules_version = '2';
 //   - role: string (required, enum: 'owner' | 'admin' | 'operator' | 'viewer')
 //   - email: string (required, valid email, max 100 chars)
 //   - displayName: string (optional, max 100 chars)
+//   - status: string (optional, enum: 'active' | 'pending') - Membership invitation status
 //   - joinedAt: timestamp | number (required, immutable)
 //   - invitedBy: string (optional, max 128 chars)
 //
@@ -218,7 +224,7 @@ service cloud.firestore {
     function isValidUserProfile(data) {
       return data.keys().hasAll(['email', 'createdAt']) &&
         data.keys().hasOnly([
-          'email', 'displayName', 'photoURL', 'role',
+          'email', 'displayName', 'photoURL', 'role', 'tenantId',
           'stripeId', 'stripeCustomerId', 'subscriptionId',
           'subscriptionStatus', 'subscriptionExpires',
           'createdAt', 'updatedAt'
@@ -228,6 +234,7 @@ service cloud.firestore {
         isValidOptionalString(data, 'displayName', 1, 100) &&
         isValidOptionalUrl(data, 'photoURL', 500) &&
         isValidOptionalString(data, 'role', 1, 50) &&
+        isValidOptionalString(data, 'tenantId', 1, 100) &&
         (!('stripeId' in data) || data.stripeId == null || (data.stripeId is string && data.stripeId.size() <= 100)) &&
         (!('stripeCustomerId' in data) || data.stripeCustomerId == null || (data.stripeCustomerId is string && data.stripeCustomerId.size() <= 100)) &&
         (!('subscriptionId' in data) || data.subscriptionId == null || (data.subscriptionId is string && data.subscriptionId.size() <= 100)) &&
@@ -256,24 +263,33 @@ service cloud.firestore {
     // Validates tenants/{tenantId} document schema
     function isValidTenant(data) {
       return data.keys().hasAll(['name', 'ownerId', 'createdAt']) &&
-        data.keys().hasOnly(['name', 'ownerId', 'slug', 'plan', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'name', 'ownerId', 'slug', 'plan',
+          'cif', 'email', 'phone', 'address',
+          'createdAt', 'updatedAt'
+        ]) &&
         data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
         data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
         isValidTimestampOrNumber(data.createdAt) &&
         isValidOptionalString(data, 'slug', 1, 100) &&
         isValidOptionalString(data, 'plan', 1, 50) &&
+        isValidOptionalString(data, 'cif', 0, 30) &&
+        isValidOptionalString(data, 'email', 0, 100) &&
+        isValidOptionalString(data, 'phone', 0, 30) &&
+        isValidOptionalString(data, 'address', 0, 200) &&
         (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
     }
 
     // Validates tenants/{tenantId}/members/{memberId} document schema
     function isValidTenantMember(data) {
       return data.keys().hasAll(['role', 'email', 'joinedAt']) &&
-        data.keys().hasOnly(['role', 'email', 'displayName', 'joinedAt', 'invitedBy']) &&
+        data.keys().hasOnly(['role', 'email', 'displayName', 'status', 'joinedAt', 'invitedBy']) &&
         data.role in ['owner', 'admin', 'operator', 'viewer'] &&
         data.email is string && isValidEmail(data.email) && data.email.size() <= 100 &&
         isValidTimestampOrNumber(data.joinedAt) &&
         isValidOptionalString(data, 'displayName', 1, 100) &&
-        isValidOptionalString(data, 'invitedBy', 1, 128);
+        isValidOptionalString(data, 'invitedBy', 1, 128) &&
+        (!('status' in data) || (data.status is string && data.status in ['active', 'pending']));
     }
 
     // Validates tenants/{tenantId}/atoms/{atomId} document schema
@@ -372,8 +388,11 @@ service cloud.firestore {
     // ===============================================================
 
     match /tenants/{tenantId} {
-      // Tenant metadata is readable by verified members of this tenant
-      allow read: if isTenantMember(tenantId);
+      // Tenant discovery: owners can list their owned organizations
+      allow list: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+
+      // Tenant details: accessible by tenant members or organization owner
+      allow get: if isTenantMember(tenantId) || resource.data.ownerId == request.auth.uid;
 
       // Any authenticated user can provision a new tenant, setting themselves as owner
       allow create: if isAuthenticated() &&

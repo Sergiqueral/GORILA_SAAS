@@ -7,9 +7,10 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { parseOmnibarInput, ParsedAtom } from "@/lib/omnibarParser";
+import { parseOmnibarInput, ParsedAtom, AtomTimeSchedule, ensureAtomSchedule } from "@/lib/omnibarParser";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import { Entity360Inspector } from "@/components/Entity360Inspector";
+import { AtomicCalendar } from "@/components/AtomicCalendar";
 import { getActiveEntities } from "@/lib/graphEngine";
 import {
   Zap,
@@ -28,6 +29,8 @@ import {
   AlertCircle,
   CheckCircle,
   Loader2,
+  CalendarDays,
+  ListOrdered,
 } from "lucide-react";
 
 export default function DashboardPage() {
@@ -42,6 +45,7 @@ export default function DashboardPage() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
   const [inspectingEntity, setInspectingEntity] = useState<string | null>(null);
+  const [dashboardView, setDashboardView] = useState<"feed" | "calendar">("feed");
 
   // Estados de Stripe Checkout
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -75,7 +79,12 @@ export default function DashboardPage() {
       try {
         const saved = localStorage.getItem("gorila_atoms");
         if (saved) {
-          setAtoms(JSON.parse(saved));
+          const parsed = JSON.parse(saved);
+          const normalized: ParsedAtom[] = parsed.map((a: any) => ({
+            ...a,
+            schedule: ensureAtomSchedule(a),
+          }));
+          setAtoms(normalized);
         }
       } catch (e) {
         console.error("Error al cargar átomos locales:", e);
@@ -178,6 +187,7 @@ export default function DashboardPage() {
       timestamp: formattedTime,
       createdAt: Date.now(),
       completed: false,
+      schedule: parsed.schedule,
     };
 
     // 1. Guardado optimista instantáneo en la UI (< 100ms)
@@ -203,6 +213,20 @@ export default function DashboardPage() {
         console.warn("Sincronización en segundo plano pendiente:", err);
       }
     }
+  };
+
+  // Modificar la programación temporal del átomo (Fecha de registro, franja horaria, todo el día)
+  const handleUpdateAtomSchedule = (atomId: string, newSchedule: AtomTimeSchedule) => {
+    const updated = atoms.map((atom) =>
+      atom.id === atomId
+        ? {
+            ...atom,
+            schedule: newSchedule,
+            updatedAt: Date.now(),
+          }
+        : atom
+    );
+    persistAtoms(updated);
   };
 
   // Ejecutar captura ultrarrápida desde la Omnibarra (< 3 segundos)
@@ -576,146 +600,216 @@ export default function DashboardPage() {
         )}
 
         {/* ============================================================ */}
-        {/* FEED DE ÁTOMOS CAPTURADOS (REGISTRO MECÁNICO)               */}
+        {/* NAVEGACIÓN Y VISTAS: FEED O CALENDARIO ATÓMICO               */}
         {/* ============================================================ */}
         <section className="space-y-4 pt-4">
-          <div className="flex items-center justify-between border-b pb-3 border-zinc-200 dark:border-zinc-800">
-            <div className="flex items-center gap-2">
-              <h2 className="text-base sm:text-lg font-semibold tracking-tight">
-                Átomos Capturados
-              </h2>
-              <span
-                className={`text-xs px-2 py-0.5 rounded-full font-mono font-bold ${
-                  outdoorMode
-                    ? "bg-black text-white"
-                    : "bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
-                }`}
-              >
-                {atoms.length}
-              </span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b pb-3 border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-base sm:text-lg font-semibold tracking-tight">
+                  {dashboardView === "feed" ? "Átomos Capturados" : "Calendario Atómico"}
+                </h2>
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full font-mono font-bold ${
+                    outdoorMode
+                      ? "bg-black text-white"
+                      : "bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  {atoms.length}
+                </span>
+              </div>
+
+              {/* Filtros Activos en Feed */}
+              {dashboardView === "feed" && (selectedTag || selectedEntity) && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-zinc-400 font-mono hidden md:inline">Filtro:</span>
+                  {selectedTag && (
+                    <Badge variant="tag" className="cursor-pointer gap-1" onClick={() => setSelectedTag(null)}>
+                      #{selectedTag} <X className="h-3 w-3" />
+                    </Badge>
+                  )}
+                  {selectedEntity && (
+                    <Badge variant="entity" className="cursor-pointer gap-1" onClick={() => setSelectedEntity(null)}>
+                      @{selectedEntity} <X className="h-3 w-3" />
+                    </Badge>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Filtros Activos */}
-            {(selectedTag || selectedEntity) && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-zinc-400 font-mono">Filtro:</span>
-                {selectedTag && (
-                  <Badge variant="tag" className="cursor-pointer gap-1" onClick={() => setSelectedTag(null)}>
-                    #{selectedTag} <X className="h-3 w-3" />
-                  </Badge>
-                )}
-                {selectedEntity && (
-                  <Badge variant="entity" className="cursor-pointer gap-1" onClick={() => setSelectedEntity(null)}>
-                    @{selectedEntity} <X className="h-3 w-3" />
-                  </Badge>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Lista de Átomos */}
-          {filteredAtoms.length === 0 ? (
+            {/* Selector de Vista: Lista vs Calendario */}
             <div
-              className={`p-12 text-center rounded-xl border-2 border-dashed ${
+              className={`inline-flex items-center p-1 rounded-xl border self-start sm:self-auto transition-all ${
                 outdoorMode
-                  ? "border-black text-black bg-zinc-50 font-bold"
-                  : "border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-600"
+                  ? "border-2 border-black bg-zinc-100 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                  : "border-zinc-200 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900/60"
               }`}
             >
-              <Zap className="h-8 w-8 mx-auto mb-3 opacity-30" />
-              <p className="text-sm font-mono">
-                {atoms.length === 0
-                  ? "Sin átomos registrados aún. Escribe en la Omnibarra para tu primera captura."
-                  : "No hay átomos que coincidan con los filtros seleccionados."}
-              </p>
+              <button
+                type="button"
+                onClick={() => setDashboardView("feed")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all ${
+                  dashboardView === "feed"
+                    ? outdoorMode
+                      ? "bg-black text-white"
+                      : "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-xs"
+                    : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }`}
+              >
+                <ListOrdered className="h-3.5 w-3.5" />
+                <span>Lista</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDashboardView("calendar")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-semibold transition-all ${
+                  dashboardView === "calendar"
+                    ? outdoorMode
+                      ? "bg-black text-white"
+                      : "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-xs"
+                    : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                }`}
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                <span>Calendario</span>
+              </button>
             </div>
+          </div>
+
+          {/* Renderizado de Vista: Calendario Atómico o Feed Secuencial */}
+          {dashboardView === "calendar" ? (
+            <AtomicCalendar
+              atoms={atoms}
+              outdoorMode={outdoorMode}
+              onToggleComplete={toggleComplete}
+              onSelectEntity={(ent) => setInspectingEntity(ent)}
+              onQuickCapture={captureAtom}
+              onUpdateAtomSchedule={handleUpdateAtomSchedule}
+            />
           ) : (
-            <div className="space-y-2.5">
-              {filteredAtoms.map((atom) => (
+            <>
+              {filteredAtoms.length === 0 ? (
                 <div
-                  key={atom.id}
-                  className={`group p-4 rounded-xl transition-all flex items-start gap-3.5 ${
+                  className={`p-12 text-center rounded-xl border-2 border-dashed ${
                     outdoorMode
-                      ? "border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] bg-white"
-                      : "border border-zinc-200 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/60 hover:border-zinc-300 dark:hover:border-zinc-700 shadow-sm"
-                  } ${atom.completed ? "opacity-50" : ""}`}
+                      ? "border-black text-black bg-zinc-50 font-bold"
+                      : "border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-600"
+                  }`}
                 >
-                  {/* Botón de Completar */}
-                  <button
-                    type="button"
-                    onClick={() => toggleComplete(atom.id)}
-                    className="mt-0.5 text-zinc-400 hover:text-emerald-500 transition-colors"
-                    title={atom.completed ? "Marcar pendiente" : "Marcar completado"}
-                  >
-                    {atom.completed ? (
-                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                    ) : (
-                      <Circle className="h-5 w-5 hover:text-zinc-600 dark:hover:text-zinc-200" />
-                    )}
-                  </button>
-
-                  {/* Contenido del Átomo */}
-                  <div className="flex-1 min-w-0 space-y-2">
-                    <p
-                      className={`text-sm sm:text-base leading-relaxed break-words font-mono ${
-                        atom.completed ? "line-through text-zinc-400 dark:text-zinc-500" : ""
-                      }`}
-                    >
-                      {atom.cleanText || atom.rawText}
-                    </p>
-
-                    {/* Metadatos en Badges */}
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      {atom.entities.map((ent) => (
-                        <Badge
-                          key={ent}
-                          variant="entity"
-                          className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
-                          onClick={() => setInspectingEntity(ent)}
-                          title={`Abrir Contexto 360° de @${ent}`}
-                        >
-                          <AtSign className="h-3 w-3" />
-                          <span>{ent}</span>
-                        </Badge>
-                      ))}
-
-                      {atom.times.map((time) => (
-                        <Badge key={time} variant="time" className="gap-1">
-                          <Clock className="h-3 w-3" />
-                          <span>{time}</span>
-                        </Badge>
-                      ))}
-
-                      {atom.tags.map((tag) => (
-                        <Badge
-                          key={tag}
-                          variant="tag"
-                          className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
-                          onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
-                        >
-                          <Hash className="h-3 w-3" />
-                          <span>{tag}</span>
-                        </Badge>
-                      ))}
-
-                      <span className="text-[10px] text-zinc-400 font-mono ml-auto">
-                        {atom.timestamp}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Botón Eliminar */}
-                  <button
-                    type="button"
-                    onClick={() => deleteAtom(atom.id)}
-                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-zinc-400 hover:text-rose-500 transition-all"
-                    title="Eliminar átomo"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <Zap className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm font-mono">
+                    {atoms.length === 0
+                      ? "Sin átomos registrados aún. Escribe en la Omnibarra para tu primera captura."
+                      : "No hay átomos que coincidan con los filtros seleccionados."}
+                  </p>
                 </div>
-              ))}
-            </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {filteredAtoms.map((atom) => (
+                    <div
+                      key={atom.id}
+                      className={`group p-4 rounded-xl transition-all flex items-start gap-3.5 ${
+                        outdoorMode
+                          ? "border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] bg-white"
+                          : "border border-zinc-200 dark:border-zinc-800/80 bg-white dark:bg-zinc-900/60 hover:border-zinc-300 dark:hover:border-zinc-700 shadow-sm"
+                      } ${atom.completed ? "opacity-50" : ""}`}
+                    >
+                      {/* Botón de Completar */}
+                      <button
+                        type="button"
+                        onClick={() => toggleComplete(atom.id)}
+                        className="mt-0.5 text-zinc-400 hover:text-emerald-500 transition-colors"
+                        title={atom.completed ? "Marcar pendiente" : "Marcar completado"}
+                      >
+                        {atom.completed ? (
+                          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                        ) : (
+                          <Circle className="h-5 w-5 hover:text-zinc-600 dark:hover:text-zinc-200" />
+                        )}
+                      </button>
+
+                      {/* Contenido del Átomo */}
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <p
+                          className={`text-sm sm:text-base leading-relaxed break-words font-mono ${
+                            atom.completed ? "line-through text-zinc-400 dark:text-zinc-500" : ""
+                          }`}
+                        >
+                          {atom.cleanText || atom.rawText}
+                        </p>
+
+                        {/* Metadatos en Badges */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          {atom.entities.map((ent) => (
+                            <Badge
+                              key={ent}
+                              variant="entity"
+                              className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
+                              onClick={() => setInspectingEntity(ent)}
+                              title={`Abrir Contexto 360° de @${ent}`}
+                            >
+                              <AtSign className="h-3 w-3" />
+                              <span>{ent}</span>
+                            </Badge>
+                          ))}
+
+                          {atom.times.map((time) => (
+                            <Badge key={time} variant="time" className="gap-1">
+                              <Clock className="h-3 w-3" />
+                              <span>{time}</span>
+                            </Badge>
+                          ))}
+
+                          {atom.schedule && (
+                            <Badge
+                              variant="time"
+                              className="cursor-pointer hover:opacity-80 transition-opacity gap-1 font-mono text-[10px]"
+                              onClick={() => setDashboardView("calendar")}
+                              title={`Ver en calendario: ${atom.schedule.recordDate}`}
+                            >
+                              <CalendarDays className="h-3 w-3 text-blue-500" />
+                              <span>
+                                {atom.schedule.recordDate}
+                                {!atom.schedule.isAllDay && atom.schedule.startTime
+                                  ? ` • ${atom.schedule.startTime}${atom.schedule.endTime ? `-${atom.schedule.endTime}` : ""}`
+                                  : " (Todo el día)"}
+                              </span>
+                            </Badge>
+                          )}
+
+                          {atom.tags.map((tag) => (
+                            <Badge
+                              key={tag}
+                              variant="tag"
+                              className="cursor-pointer hover:opacity-80 transition-opacity gap-1"
+                              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                            >
+                              <Hash className="h-3 w-3" />
+                              <span>{tag}</span>
+                            </Badge>
+                          ))}
+
+                          <span className="text-[10px] text-zinc-400 font-mono ml-auto">
+                            {atom.timestamp}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Botón Eliminar */}
+                      <button
+                        type="button"
+                        onClick={() => deleteAtom(atom.id)}
+                        className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-zinc-400 hover:text-rose-500 transition-all"
+                        title="Eliminar átomo"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </section>
 
