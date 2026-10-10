@@ -6,6 +6,8 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2024-06-20',
 });
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: Request) {
   try {
     const idToken = req.headers.get('Authorization')?.split('Bearer ')[1];

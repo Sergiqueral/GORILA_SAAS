@@ -15,16 +15,28 @@ import { Flame, ArrowLeft } from 'lucide-react'
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    setIsLoading(true)
     try {
       await signInWithEmailAndPassword(auth, email, password)
       router.push("/dashboard")
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error signing in', error)
-      // TODO: Add user-friendly error handling
+      let message = 'An error occurred during sign in'
+      if (error?.code === 'auth/invalid-credential' || error?.code === 'auth/user-not-found' || error?.code === 'auth/wrong-password') {
+        message = 'Invalid email or password.'
+      } else if (error?.code === 'auth/configuration-not-found') {
+        message = 'El método de Correo/Contraseña no está habilitado en Firebase. Ve a la Consola de Firebase > Authentication > Sign-in method y activa "Correo electrónico/contraseña".'
+      } else if (error instanceof Error) {
+        message = error.message
+      }
+      alert(message)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -66,7 +78,9 @@ export default function LoginPage() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-4">
-              <Button type="submit" className="w-full bg-[#FF6F61] text-white hover:bg-[#FFB3B0]">Log In</Button>
+              <Button type="submit" disabled={isLoading} className="w-full bg-[#FF6F61] text-white hover:bg-[#FFB3B0]">
+                {isLoading ? 'Logging in...' : 'Log In'}
+              </Button>
               <p className="text-sm text-center">
                 Don't have an account?{" "}
                 <Link href="/signup" className="text-[#FF6F61] hover:underline">

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { adminAuth, firestore } from '../../../../firebase/admin';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(req: Request) {
   try {
     // Assuming the user is sending a valid Firebase ID token via headers

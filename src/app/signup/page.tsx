@@ -57,6 +57,8 @@ export default function SignupPage() {
         message = 'Password should be at least 6 characters.'
       } else if (error?.code === 'auth/invalid-email') {
         message = 'Please enter a valid email address.'
+      } else if (error?.code === 'auth/configuration-not-found') {
+        message = 'El método de Correo/Contraseña no está habilitado en Firebase. Ve a la Consola de Firebase > Authentication > Sign-in method y activa "Correo electrónico/contraseña".'
       } else if (error instanceof Error) {
         message = error.message
       }
