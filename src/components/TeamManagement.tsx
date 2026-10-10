@@ -31,9 +31,10 @@ import {
 interface TeamManagementProps {
   outdoorMode?: boolean;
   onToast?: (type: "success" | "error", text: string) => void;
+  onOpenBilling?: () => void;
 }
 
-export function TeamManagement({ outdoorMode = false, onToast }: TeamManagementProps) {
+export function TeamManagement({ outdoorMode = false, onToast, onOpenBilling }: TeamManagementProps) {
   const { user } = useAuth();
   const {
     tenant,
@@ -310,6 +311,25 @@ export function TeamManagement({ outdoorMode = false, onToast }: TeamManagementP
               >
                 {pendingCount} Pendientes
               </Badge>
+            )}
+            <Badge
+              variant="outline"
+              className="border-blue-500/40 text-blue-600 dark:text-blue-400 font-mono text-xs px-2.5 py-1"
+            >
+              Asientos: {members.length} / {1 + (tenant?.subscription?.additionalSeats || 0)}
+            </Badge>
+            {onOpenBilling && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onOpenBilling}
+                className={`text-xs font-mono gap-1 h-7 px-2.5 ${
+                  outdoorMode ? "border-2 border-black bg-white hover:bg-black hover:text-white" : ""
+                }`}
+              >
+                <Plus className="h-3 w-3 text-emerald-500" />
+                <span>Ampliar Asientos</span>
+              </Button>
             )}
             <Badge variant="outline" className="font-mono text-xs px-2.5 py-1">
               Tu rol: {getRoleLabel(currentRole)}

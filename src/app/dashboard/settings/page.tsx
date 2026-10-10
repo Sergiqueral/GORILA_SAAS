@@ -26,6 +26,7 @@ import {
   FileText,
   CreditCard,
   Plus,
+  Minus,
   Trash2,
   CheckCircle2,
   AlertCircle,
@@ -35,10 +36,13 @@ import {
   Loader2,
   LogOut,
   ExternalLink,
+  Receipt,
+  TrendingUp,
+  UserPlus,
 } from "lucide-react";
 import { auth } from "@/firebase/config";
 
-type ActiveTab = "profile" | "company" | "team" | "permissions";
+type ActiveTab = "profile" | "company" | "team" | "permissions" | "billing";
 
 export default function ClientSettingsDashboard() {
   const router = useRouter();
@@ -75,6 +79,11 @@ export default function ClientSettingsDashboard() {
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [isSavingCompany, setIsSavingCompany] = useState(false);
+
+  // Estados de FinOps & Stripe (Módulo de Expansión & Portal)
+  const [seatQuantity, setSeatQuantity] = useState<number>(1);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [isOpeningPortal, setIsOpeningPortal] = useState(false);
 
 
   // Inicializar estados locales cuando los datos carguen
@@ -162,6 +171,130 @@ export default function ClientSettingsDashboard() {
       showToast("error", err?.message || "Error al guardar datos de la empresa");
     } finally {
       setIsSavingCompany(false);
+    }
+  };
+
+  // ============================================================
+  // FINOPS: MÓDULO DE EXPANSIÓN (AÑADIR USUARIOS - 10€/MES)
+  // ============================================================
+  const handleAddSeatCheckout = async (quantity: number = 1) => {
+    if (!tenant?.id) {
+      showToast("error", "No se detectó el identificador del espacio de trabajo");
+      return;
+    }
+    setIsCheckingOut(true);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "add_seat",
+          priceId: "price_1UP8klLDAGQuuEjm755xMMmm",
+          additionalSeats: quantity,
+          tenantId: tenant.id,
+          userId: user?.uid,
+          userEmail: user?.email,
+          customerId:
+            tenant.stripeCustomerId ||
+            tenant.stripe_customer_id ||
+            tenant.subscription?.stripeCustomerId,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        showToast("error", data.error || "No se pudo iniciar el proceso de checkout");
+      }
+    } catch (err: any) {
+      showToast("error", err?.message || "Error al conectar con la pasarela de pago");
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
+  // ============================================================
+  // FINOPS: CONTRATAR PLAN BASE PRO (29€/MES)
+  // ============================================================
+  const handleSubscribePro = async () => {
+    if (!tenant?.id) {
+      showToast("error", "No se detectó el identificador del espacio de trabajo");
+      return;
+    }
+    setIsCheckingOut(true);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          userId: user?.uid,
+          userEmail: user?.email,
+          customerId:
+            tenant.stripeCustomerId ||
+            tenant.stripe_customer_id ||
+            tenant.subscription?.stripeCustomerId,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        showToast("error", data.error || "No se pudo iniciar el proceso de suscripción Pro");
+      }
+    } catch (err: any) {
+      showToast("error", err?.message || "Error al conectar con Stripe");
+    } finally {
+      setIsCheckingOut(false);
+    }
+  };
+
+  // ============================================================
+  // FINOPS: ACCESO AL PORTAL DEL CLIENTE DE STRIPE
+  // ============================================================
+  const handleOpenPortal = async () => {
+    if (!tenant?.id) {
+      showToast("error", "No se detectó el identificador del espacio de trabajo");
+      return;
+    }
+
+    const customerId =
+      tenant.stripeCustomerId ||
+      tenant.stripe_customer_id ||
+      tenant.subscription?.stripeCustomerId;
+
+    if (!customerId) {
+      showToast(
+        "error",
+        "Aún no hay cuenta de facturación en Stripe. Activa el Plan Pro o añade un usuario para inicializarla."
+      );
+      return;
+    }
+
+    setIsOpeningPortal(true);
+    try {
+      const res = await fetch("/api/portal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tenantId: tenant.id,
+          customerId,
+          returnUrl: window.location.href,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        showToast("error", data.error || "No se pudo abrir el portal de facturación");
+      }
+    } catch (err: any) {
+      showToast("error", err?.message || "Error al conectar con el portal de Stripe");
+    } finally {
+      setIsOpeningPortal(false);
     }
   };
 
@@ -336,6 +469,21 @@ export default function ClientSettingsDashboard() {
             <ShieldCheck className="h-4 w-4" />
             <span>Matriz de Permisos (RBAC)</span>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("billing")}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold whitespace-nowrap transition-all ${
+              activeTab === "billing"
+                ? outdoorMode
+                  ? "bg-black text-white font-bold"
+                  : "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+            }`}
+          >
+            <CreditCard className="h-4 w-4" />
+            <span>Facturación (FinOps)</span>
+          </button>
         </div>
 
         {/* ============================================================ */}
@@ -496,16 +644,19 @@ export default function ClientSettingsDashboard() {
                     Plan: {tenant?.plan || "Free"}
                   </Badge>
                   {isOwner && (
-                    <Link href="/dashboard">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="gap-1.5 text-xs font-mono border-zinc-300 dark:border-zinc-700"
-                      >
-                        <CreditCard className="h-3.5 w-3.5 text-emerald-500" />
-                        <span>Gestionar con Stripe</span>
-                      </Button>
-                    </Link>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setActiveTab("billing")}
+                      className={`gap-1.5 text-xs font-mono ${
+                        outdoorMode
+                          ? "border-2 border-black bg-white hover:bg-black hover:text-white"
+                          : "border-zinc-300 dark:border-zinc-700"
+                      }`}
+                    >
+                      <CreditCard className="h-3.5 w-3.5 text-emerald-500" />
+                      <span>Gestionar con Stripe</span>
+                    </Button>
                   )}
                 </div>
               </div>
@@ -626,6 +777,7 @@ export default function ClientSettingsDashboard() {
           <TeamManagement
             outdoorMode={outdoorMode}
             onToast={showToast}
+            onOpenBilling={() => setActiveTab("billing")}
           />
         )}
 
@@ -736,6 +888,377 @@ export default function ClientSettingsDashboard() {
                 </table>
               </div>
             </div>
+          </section>
+        )}
+
+        {/* ============================================================ */}
+        {/* PESTAÑA 5: FACTURACIÓN & SUSCRIPCIÓN (FINOPS)              */}
+        {/* ============================================================ */}
+        {activeTab === "billing" && (
+          <section className="space-y-6">
+            {/* 1. ESTADO FINOPS SOBERANO */}
+            <div
+              className={`p-6 rounded-2xl border transition-all ${
+                outdoorMode
+                  ? "border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                  : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm"
+              }`}
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-zinc-200 dark:border-zinc-800">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight flex items-center gap-2">
+                    <CreditCard className="h-5 w-5 text-emerald-500" />
+                    <span>Control de Facturación y Suscripción (FinOps)</span>
+                  </h2>
+                  <p className="text-xs text-zinc-500 font-mono mt-1">
+                    Soberanía del Dato: Pagos e identidades fiscales delegadas a Stripe bajo client_reference_id{" "}
+                    <code className="font-bold">{tenant?.id}</code>
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant="outline"
+                    className={`font-mono text-xs px-2.5 py-1 ${
+                      tenant?.subscription?.status === "active"
+                        ? "border-emerald-500 text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40"
+                        : tenant?.subscription?.status === "past_due"
+                        ? "border-amber-500 text-amber-600 bg-amber-50"
+                        : "border-zinc-400 text-zinc-600 dark:text-zinc-400"
+                    }`}
+                  >
+                    Estado:{" "}
+                    {tenant?.subscription?.status === "active"
+                      ? "ACTIVA"
+                      : tenant?.subscription?.status === "past_due"
+                      ? "PAGO PENDIENTE"
+                      : tenant?.subscription?.status === "trialing"
+                      ? "PRUEBA"
+                      : "FREE TIER"}
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Grid de Métricas de Facturación */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                {/* Métrica 1: Plan */}
+                <div
+                  className={`p-4 rounded-xl border ${
+                    outdoorMode
+                      ? "border-2 border-black bg-zinc-50"
+                      : "border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40"
+                  }`}
+                >
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
+                    Plan Contratado
+                  </span>
+                  <div className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                    <Crown className="h-4 w-4 text-amber-500" />
+                    <span>{tenant?.subscription?.planName || tenant?.plan || "Gorila Free Tier"}</span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 font-mono mt-1 block">
+                    {tenant?.subscription?.priceAmount
+                      ? `${(tenant.subscription.priceAmount / 100).toFixed(2)} €/mes base`
+                      : "0,00 € / mes"}
+                  </span>
+                </div>
+
+                {/* Métrica 2: Asientos */}
+                <div
+                  className={`p-4 rounded-xl border ${
+                    outdoorMode
+                      ? "border-2 border-black bg-zinc-50"
+                      : "border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40"
+                  }`}
+                >
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
+                    Capacidad de Asientos
+                  </span>
+                  <div className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                    <Users className="h-4 w-4 text-blue-500" />
+                    <span>
+                      {members.length} / {1 + (tenant?.subscription?.additionalSeats || 0)} Ocupados
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 font-mono mt-1 block">
+                    1 base + {tenant?.subscription?.additionalSeats || 0} adicionales
+                  </span>
+                </div>
+
+                {/* Métrica 3: Ciclo de Renovación */}
+                <div
+                  className={`p-4 rounded-xl border ${
+                    outdoorMode
+                      ? "border-2 border-black bg-zinc-50"
+                      : "border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40"
+                  }`}
+                >
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
+                    Próxima Renovación
+                  </span>
+                  <div className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100 flex items-center gap-1.5">
+                    <Receipt className="h-4 w-4 text-emerald-500" />
+                    <span>
+                      {tenant?.subscription?.currentPeriodEnd
+                        ? new Date(tenant.subscription.currentPeriodEnd * 1000).toLocaleDateString("es-ES", {
+                            day: "2-digit",
+                            month: "short",
+                            year: "numeric",
+                          })
+                        : "Sin ciclo activo"}
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-zinc-500 font-mono mt-1 block">
+                    {tenant?.subscription?.status === "active" ? "Renovación automática" : "Facturación inactiva"}
+                  </span>
+                </div>
+
+                {/* Métrica 4: Customer ID Stripe */}
+                <div
+                  className={`p-4 rounded-xl border ${
+                    outdoorMode
+                      ? "border-2 border-black bg-zinc-50"
+                      : "border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/40"
+                  }`}
+                >
+                  <span className="text-[11px] font-mono text-zinc-400 uppercase tracking-wider block mb-1">
+                    ID Cliente Stripe
+                  </span>
+                  <div className="text-xs font-bold font-mono text-zinc-700 dark:text-zinc-300 truncate" title={tenant?.stripeCustomerId || tenant?.subscription?.stripeCustomerId || "No asignado"}>
+                    {tenant?.stripeCustomerId || tenant?.subscription?.stripeCustomerId || "No asignado"}
+                  </div>
+                  <span className="text-[10px] text-zinc-400 font-mono mt-1 block">
+                    Firma: whsec validada
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. MÓDULO DE EXPANSIÓN (AÑADIR USUARIOS - 10,00 €/MES) */}
+            <div
+              className={`p-6 rounded-2xl border transition-all ${
+                outdoorMode
+                  ? "border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                  : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm"
+              }`}
+            >
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-6 border-b border-zinc-200 dark:border-zinc-800">
+                <div className="space-y-1 max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <UserPlus className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    <h3 className="text-base font-bold tracking-tight">Módulo de Expansión: Añadir Usuarios</h3>
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
+                    Incrementa la capacidad de tu equipo en obra. Cada asiento adicional permite invitar a un nuevo operario o administrador con acceso ilimitado al Cockpit.
+                  </p>
+                  <div className="pt-2 flex items-center gap-3">
+                    <Badge variant="outline" className="font-mono text-xs border-emerald-500 text-emerald-600 dark:text-emerald-400">
+                      10,00 € / mes por usuario
+                    </Badge>
+                    <span className="text-xs font-mono text-zinc-400">
+                      ID: price_1UP8klLDAGQuuEjm755xMMmm
+                    </span>
+                  </div>
+                </div>
+
+                {/* Controles táctiles del Módulo de Expansión */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+                  {/* Selector Táctil Stepper (>= 48px) */}
+                  <div className="flex items-center justify-center border-2 border-black rounded-xl overflow-hidden bg-white">
+                    <button
+                      type="button"
+                      onClick={() => setSeatQuantity((prev) => Math.max(1, prev - 1))}
+                      disabled={seatQuantity <= 1 || isCheckingOut}
+                      className="w-12 h-12 flex items-center justify-center font-bold text-lg hover:bg-zinc-100 disabled:opacity-40 disabled:hover:bg-white transition-colors"
+                      aria-label="Restar un usuario"
+                    >
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <div className="w-14 h-12 flex items-center justify-center font-mono font-bold text-base border-x-2 border-black bg-zinc-50">
+                      {seatQuantity}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSeatQuantity((prev) => Math.min(50, prev + 1))}
+                      disabled={isCheckingOut}
+                      className="w-12 h-12 flex items-center justify-center font-bold text-lg hover:bg-zinc-100 disabled:opacity-40 disabled:hover:bg-white transition-colors"
+                      aria-label="Sumar un usuario"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Botón Táctil de Compra (Modo Outdoor: Alto Contraste, min-h-[48px]) */}
+                  <Button
+                    type="button"
+                    onClick={() => handleAddSeatCheckout(seatQuantity)}
+                    disabled={isCheckingOut || !isAdmin}
+                    className={`min-h-[48px] px-6 font-mono font-bold text-xs tracking-wider transition-all ${
+                      outdoorMode
+                        ? "bg-black text-white hover:bg-zinc-800 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]"
+                        : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-95"
+                    }`}
+                  >
+                    {isCheckingOut ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        <span>Conectando con Stripe...</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="h-4 w-4 mr-2" />
+                        <span>
+                          Añadir {seatQuantity} Usuario{seatQuantity > 1 ? "s" : ""} (+{(seatQuantity * 10).toFixed(2)} €/mes)
+                        </span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="pt-4 flex flex-wrap items-center gap-2 text-xs font-mono text-zinc-500">
+                <span>Acceso rápido:</span>
+                <button
+                  type="button"
+                  onClick={() => setSeatQuantity(1)}
+                  className={`px-3 py-1 rounded-lg border text-xs font-mono font-bold ${
+                    seatQuantity === 1
+                      ? outdoorMode
+                        ? "bg-black text-white border-black"
+                        : "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  +1 Usuario (10 €/m)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSeatQuantity(2)}
+                  className={`px-3 py-1 rounded-lg border text-xs font-mono font-bold ${
+                    seatQuantity === 2
+                      ? outdoorMode
+                        ? "bg-black text-white border-black"
+                        : "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  +2 Usuarios (20 €/m)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSeatQuantity(5)}
+                  className={`px-3 py-1 rounded-lg border text-xs font-mono font-bold ${
+                    seatQuantity === 5
+                      ? outdoorMode
+                        ? "bg-black text-white border-black"
+                        : "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                      : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  +5 Usuarios (50 €/m)
+                </button>
+              </div>
+            </div>
+
+            {/* 3. ACCESO FINOPS: PORTAL DEL CLIENTE DE STRIPE */}
+            <div
+              className={`p-6 rounded-2xl border transition-all ${
+                outdoorMode
+                  ? "border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                  : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 shadow-sm"
+              }`}
+            >
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                <div className="space-y-1 max-w-xl">
+                  <div className="flex items-center gap-2">
+                    <Receipt className="h-5 w-5 text-zinc-700 dark:text-zinc-300" />
+                    <h3 className="text-base font-bold tracking-tight">Portal de Clientes de Stripe</h3>
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 font-mono">
+                    Ley de la Fricción Cero: Gestiona tus métodos de pago, actualiza tus tarjetas corporativas y descarga facturas fiscales oficiales en PDF directamente en la interfaz certificada de Stripe, sin intermediarios ni almacenamiento de tarjetas en nuestra base de datos.
+                  </p>
+                  <p className="text-[11px] text-zinc-400 font-mono pt-1">
+                    * Solo los Propietarios de la organización tienen autorización para acceder a la facturación corporativa.
+                  </p>
+                </div>
+
+                <div>
+                  <Button
+                    type="button"
+                    onClick={handleOpenPortal}
+                    disabled={isOpeningPortal || !isOwner}
+                    className={`min-h-[48px] px-6 font-mono font-bold text-xs tracking-wider transition-all w-full sm:w-auto ${
+                      outdoorMode
+                        ? "border-2 border-black bg-white text-black hover:bg-black hover:text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]"
+                        : "border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-700 shadow-sm"
+                    }`}
+                  >
+                    {isOpeningPortal ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        <span>Abriendo Portal Stripe...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ExternalLink className="h-4 w-4 mr-2 text-emerald-500" />
+                        <span>Gestionar Facturación en Stripe</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. PLAN PRO (SI ESTÁ EN FREE TIER) */}
+            {(!tenant?.subscription || tenant.subscription.status !== "active") && (
+              <div
+                className={`p-6 rounded-2xl border transition-all ${
+                  outdoorMode
+                    ? "border-2 border-black bg-amber-100 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-black"
+                    : "border-amber-200 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/20 text-zinc-900 dark:text-zinc-100"
+                }`}
+              >
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                  <div className="space-y-1 max-w-xl">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                      <h3 className="text-base font-bold tracking-tight">Activar Suscripción Base Pro</h3>
+                    </div>
+                    <p className="text-xs font-mono text-zinc-700 dark:text-zinc-300">
+                      Desbloquea el rendimiento completo del Gorila Codex: capturas instantáneas en Omnibarra, sincronización de Cloud Tasks con rate limiting, histórico ilimitado de átomos y auditorías de obra.
+                    </p>
+                    <span className="inline-block text-xs font-mono font-bold text-amber-700 dark:text-amber-400 pt-1">
+                      29,00 € / mes · Facturación periódica de Stripe
+                    </span>
+                  </div>
+
+                  <div>
+                    <Button
+                      type="button"
+                      onClick={handleSubscribePro}
+                      disabled={isCheckingOut || !isOwner}
+                      className={`min-h-[48px] px-6 font-mono font-bold text-xs tracking-wider transition-all w-full sm:w-auto ${
+                        outdoorMode
+                          ? "bg-black text-white hover:bg-zinc-800 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]"
+                          : "bg-amber-600 hover:bg-amber-700 text-white shadow-md"
+                      }`}
+                    >
+                      {isCheckingOut ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          <span>Procesando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Crown className="h-4 w-4 mr-2" />
+                          <span>Suscribir Plan Pro (29 €/m)</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
       </div>
