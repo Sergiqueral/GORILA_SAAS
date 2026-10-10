@@ -1,0 +1,487 @@
+rules_version = '2';
+
+// ===============================================================
+// Gorila SaaS - Hardened Cloud Firestore Security Rules
+// ===============================================================
+// Philosophy: "Fricción Cero" - High speed field operations with
+// uncompromising sovereign multi-tenant data isolation.
+//
+// Security Pillars:
+// 1. Strict Multi-Tenancy: Tenant data is strictly isolated. Operators
+//    of Tenant A can NEVER read, query, or mutate Tenant B documents.
+// 2. Privilege Escalation Prevention: User subscription state and roles
+//    are managed strictly by Firebase Admin SDK (backend/webhooks).
+//    Client-side role tampering or Stripe parameter forging is rejected.
+// 3. Validator Function Pattern: Domain validators validate types, bounds,
+//    and schema integrity on BOTH create and update operations.
+// 4. Resource Exhaustion / DoS Prevention: Every string and list has
+//    explicit size limits. Extraneous fields are rejected via hasOnly().
+// ===============================================================
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: users
+// Document ID: {userId} (Firebase Auth UID)
+// Fields:
+//   - email: string (required, valid email, max 100 chars)
+//   - displayName: string (optional, max 100 chars)
+//   - photoURL: string (optional, max 500 chars, valid URL)
+//   - role: string (optional, max 50 chars, default 'Free User', client cannot escalate)
+//   - stripeId: string | null (optional, max 100 chars, managed by server)
+//   - stripeCustomerId: string | null (optional, max 100 chars, managed by server)
+//   - subscriptionId: string | null (optional, max 100 chars, managed by server)
+//   - subscriptionStatus: string | null (optional, max 50 chars, managed by server)
+//   - subscriptionExpires: number | timestamp | null (optional, managed by server)
+//   - createdAt: timestamp | number (required, immutable)
+//   - updatedAt: timestamp | number (optional)
+//
+// Collection: users/{userId}/atoms
+// Document ID: {atomId} (Unique personal atom identifier)
+// Fields:
+//   - rawText: string (required, 1..5000 chars) - Raw capture from Omnibar
+//   - cleanText: string (required, 0..5000 chars) - Extracted clean task/observation
+//   - entities: list (optional, max 30 items) - Extracted @entities
+//   - times: list (optional, max 30 items) - Extracted //times
+//   - tags: list (optional, max 30 items) - Extracted #tags
+//   - completed: bool (required) - Completion state
+//   - createdAt: timestamp | number (required, immutable)
+//   - updatedAt: timestamp | number (optional)
+//
+// Collection: tenants
+// Document ID: {tenantId} (Unique organization slug or identifier)
+// Fields:
+//   - name: string (required, 1..100 chars) - Organization name
+//   - ownerId: string (required, 1..128 chars, owner Auth UID, immutable)
+//   - slug: string (optional, 1..100 chars) - URL/Workspace slug
+//   - plan: string (optional, max 50 chars) - Organization plan
+//   - createdAt: timestamp | number (required, immutable)
+//   - updatedAt: timestamp | number (optional)
+//
+// Collection: tenants/{tenantId}/members
+// Document ID: {memberId} (Member Firebase Auth UID)
+// Fields:
+//   - role: string (required, enum: 'owner' | 'admin' | 'operator' | 'viewer')
+//   - email: string (required, valid email, max 100 chars)
+//   - displayName: string (optional, max 100 chars)
+//   - joinedAt: timestamp | number (required, immutable)
+//   - invitedBy: string (optional, max 128 chars)
+//
+// Collection: tenants/{tenantId}/atoms
+// Document ID: {atomId} (Unique shared atom identifier)
+// Fields:
+//   - rawText: string (required, 1..5000 chars) - Captured text
+//   - cleanText: string (required, 0..5000 chars) - Sanitized text
+//   - authorId: string (required, 1..128 chars, creator UID, immutable)
+//   - authorEmail: string (optional, max 100 chars)
+//   - authorName: string (optional, max 100 chars)
+//   - completed: bool (required) - Status
+//   - entities: list (optional, max 50 items) - Parsed @entities
+//   - times: list (optional, max 50 items) - Parsed //times
+//   - tags: list (optional, max 50 items) - Parsed #tags
+//   - completedAt: timestamp | number | null (optional)
+//   - completedBy: string | null (optional, max 128 chars)
+//   - createdAt: timestamp | number (required, immutable)
+//   - updatedAt: timestamp | number (optional)
+//
+// Collection: tenants/{tenantId}/entities
+// Document ID: {entityId} (Unique entity identifier or slug)
+// Fields:
+//   - name: string (required, 1..100 chars) - Entity/Subcontractor name
+//   - type: string (optional, max 50 chars) - Category (e.g. 'subcontractor', 'supplier')
+//   - email: string (optional, valid email, max 100 chars)
+//   - phone: string (optional, max 30 chars)
+//   - notes: string (optional, max 1000 chars)
+//   - tags: list (optional, max 30 items)
+//   - createdBy: string (required, 1..128 chars, creator UID, immutable)
+//   - createdAt: timestamp | number (required, immutable)
+//   - updatedAt: timestamp | number (optional)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Global Default Deny
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // Common Helper Functions
+    // ===============================================================
+
+    // Check if the request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user matches a given user ID
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Validate email format
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Validate URL format (http or https)
+    function isValidUrl(url) {
+      return url is string &&
+        (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    // Validate timestamp or positive numeric timestamp (epoch ms)
+    function isValidTimestampOrNumber(val) {
+      return val is timestamp || (val is number && val > 0);
+    }
+
+    // Validate bounded list size
+    function isValidList(listData, maxSize) {
+      return listData is list && listData.size() <= maxSize;
+    }
+
+    // Validate optional string: if present, must be string within [minLen, maxLen]
+    function isValidOptionalString(data, field, minLen, maxLen) {
+      return !(field in data) ||
+             (data[field] is string &&
+              data[field].size() >= minLen &&
+              data[field].size() <= maxLen);
+    }
+
+    // Validate optional URL: if present, must be valid URL and within length
+    function isValidOptionalUrl(data, field, maxLen) {
+      return !(field in data) ||
+             (data[field] is string &&
+              data[field].size() <= maxLen &&
+              isValidUrl(data[field]));
+    }
+
+    // ===============================================================
+    // Multi-Tenant RBAC Helpers
+    // ===============================================================
+
+    // Path to tenant membership record for current user
+    function memberDocPath(tenantId) {
+      return /databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid);
+    }
+
+    // Check if user is a member of the given tenant
+    function isTenantMember(tenantId) {
+      return isAuthenticated() && exists(memberDocPath(tenantId));
+    }
+
+    // Retrieve the membership document data for current user in the tenant
+    function getTenantMember(tenantId) {
+      return get(memberDocPath(tenantId)).data;
+    }
+
+    // Check if current user has one of the allowed roles within the tenant
+    function hasTenantRole(tenantId, allowedRoles) {
+      return isTenantMember(tenantId) &&
+        getTenantMember(tenantId).role in allowedRoles;
+    }
+
+    // Tenant Role Checks
+    function isTenantOwner(tenantId) {
+      return hasTenantRole(tenantId, ['owner']);
+    }
+
+    function isTenantAdmin(tenantId) {
+      return hasTenantRole(tenantId, ['owner', 'admin']);
+    }
+
+    function isTenantOperator(tenantId) {
+      return hasTenantRole(tenantId, ['owner', 'admin', 'operator']);
+    }
+
+    // Initial tenant ownership check (for atomic bootstrap creation)
+    function isInitialTenantOwner(tenantId) {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/tenants/$(tenantId)) &&
+         get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerId == request.auth.uid) ||
+        (existsAfter(/databases/$(database)/documents/tenants/$(tenantId)) &&
+         getAfter(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerId == request.auth.uid)
+      );
+    }
+
+    // ===============================================================
+    // Domain Validator Functions (Mandatory Validator Pattern)
+    // ===============================================================
+
+    // Validates users/{userId} document schema
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['email', 'createdAt']) &&
+        data.keys().hasOnly([
+          'email', 'displayName', 'photoURL', 'role',
+          'stripeId', 'stripeCustomerId', 'subscriptionId',
+          'subscriptionStatus', 'subscriptionExpires',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.email is string && isValidEmail(data.email) && data.email.size() <= 100 &&
+        isValidTimestampOrNumber(data.createdAt) &&
+        isValidOptionalString(data, 'displayName', 1, 100) &&
+        isValidOptionalUrl(data, 'photoURL', 500) &&
+        isValidOptionalString(data, 'role', 1, 50) &&
+        (!('stripeId' in data) || data.stripeId == null || (data.stripeId is string && data.stripeId.size() <= 100)) &&
+        (!('stripeCustomerId' in data) || data.stripeCustomerId == null || (data.stripeCustomerId is string && data.stripeCustomerId.size() <= 100)) &&
+        (!('subscriptionId' in data) || data.subscriptionId == null || (data.subscriptionId is string && data.subscriptionId.size() <= 100)) &&
+        (!('subscriptionStatus' in data) || data.subscriptionStatus == null || (data.subscriptionStatus is string && data.subscriptionStatus.size() <= 50)) &&
+        (!('subscriptionExpires' in data) || data.subscriptionExpires == null || isValidTimestampOrNumber(data.subscriptionExpires)) &&
+        (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
+    }
+
+    // Validates users/{userId}/atoms/{atomId} document schema
+    function isValidPersonalAtom(data) {
+      return data.keys().hasAll(['rawText', 'cleanText', 'completed', 'createdAt']) &&
+        data.keys().hasOnly([
+          'rawText', 'cleanText', 'entities', 'times',
+          'tags', 'completed', 'createdAt', 'updatedAt'
+        ]) &&
+        data.rawText is string && data.rawText.size() >= 1 && data.rawText.size() <= 5000 &&
+        data.cleanText is string && data.cleanText.size() <= 5000 &&
+        data.completed is bool &&
+        isValidTimestampOrNumber(data.createdAt) &&
+        (!('entities' in data) || isValidList(data.entities, 30)) &&
+        (!('times' in data) || isValidList(data.times, 30)) &&
+        (!('tags' in data) || isValidList(data.tags, 30)) &&
+        (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
+    }
+
+    // Validates tenants/{tenantId} document schema
+    function isValidTenant(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'createdAt']) &&
+        data.keys().hasOnly(['name', 'ownerId', 'slug', 'plan', 'createdAt', 'updatedAt']) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128 &&
+        isValidTimestampOrNumber(data.createdAt) &&
+        isValidOptionalString(data, 'slug', 1, 100) &&
+        isValidOptionalString(data, 'plan', 1, 50) &&
+        (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
+    }
+
+    // Validates tenants/{tenantId}/members/{memberId} document schema
+    function isValidTenantMember(data) {
+      return data.keys().hasAll(['role', 'email', 'joinedAt']) &&
+        data.keys().hasOnly(['role', 'email', 'displayName', 'joinedAt', 'invitedBy']) &&
+        data.role in ['owner', 'admin', 'operator', 'viewer'] &&
+        data.email is string && isValidEmail(data.email) && data.email.size() <= 100 &&
+        isValidTimestampOrNumber(data.joinedAt) &&
+        isValidOptionalString(data, 'displayName', 1, 100) &&
+        isValidOptionalString(data, 'invitedBy', 1, 128);
+    }
+
+    // Validates tenants/{tenantId}/atoms/{atomId} document schema
+    function isValidTenantAtom(data) {
+      return data.keys().hasAll(['rawText', 'cleanText', 'authorId', 'completed', 'createdAt']) &&
+        data.keys().hasOnly([
+          'rawText', 'cleanText', 'authorId', 'authorEmail', 'authorName',
+          'completed', 'entities', 'times', 'tags',
+          'completedAt', 'completedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.rawText is string && data.rawText.size() >= 1 && data.rawText.size() <= 5000 &&
+        data.cleanText is string && data.cleanText.size() <= 5000 &&
+        data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
+        data.completed is bool &&
+        isValidTimestampOrNumber(data.createdAt) &&
+        isValidOptionalString(data, 'authorEmail', 3, 100) &&
+        isValidOptionalString(data, 'authorName', 1, 100) &&
+        (!('entities' in data) || isValidList(data.entities, 50)) &&
+        (!('times' in data) || isValidList(data.times, 50)) &&
+        (!('tags' in data) || isValidList(data.tags, 50)) &&
+        (!('completedAt' in data) || data.completedAt == null || isValidTimestampOrNumber(data.completedAt)) &&
+        (!('completedBy' in data) || data.completedBy == null || (data.completedBy is string && data.completedBy.size() <= 128)) &&
+        (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
+    }
+
+    // Validates tenants/{tenantId}/entities/{entityId} document schema
+    function isValidTenantEntity(data) {
+      return data.keys().hasAll(['name', 'createdBy', 'createdAt']) &&
+        data.keys().hasOnly([
+          'name', 'type', 'email', 'phone',
+          'notes', 'tags', 'createdBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128 &&
+        isValidTimestampOrNumber(data.createdAt) &&
+        isValidOptionalString(data, 'type', 1, 50) &&
+        (!('email' in data) || (data.email is string && isValidEmail(data.email) && data.email.size() <= 100)) &&
+        isValidOptionalString(data, 'phone', 1, 30) &&
+        isValidOptionalString(data, 'notes', 0, 1000) &&
+        (!('tags' in data) || isValidList(data.tags, 30)) &&
+        (!('updatedAt' in data) || isValidTimestampOrNumber(data.updatedAt));
+    }
+
+    // ===============================================================
+    // Rules: Users & Solo Operator Workspace
+    // ===============================================================
+
+    match /users/{userId} {
+      // User profile is private PII; only the document owner can read it
+      allow read: if isOwner(userId);
+
+      // Client can only create their own profile with baseline 'Free User' role
+      // and cannot inject privileged roles or active Stripe subscription data.
+      allow create: if isOwner(userId) &&
+        isValidUserProfile(request.resource.data) &&
+        (!('role' in request.resource.data) || request.resource.data.role == 'Free User') &&
+        (!('stripeId' in request.resource.data) || request.resource.data.stripeId == null) &&
+        (!('stripeCustomerId' in request.resource.data) || request.resource.data.stripeCustomerId == null) &&
+        (!('subscriptionId' in request.resource.data) || request.resource.data.subscriptionId == null) &&
+        (!('subscriptionStatus' in request.resource.data) || request.resource.data.subscriptionStatus == null) &&
+        (!('subscriptionExpires' in request.resource.data) || request.resource.data.subscriptionExpires == null);
+
+      // Client can update non-sensitive profile details (displayName, photoURL),
+      // but CANNOT modify role, stripeId, subscriptionStatus, subscriptionExpires, or createdAt.
+      // Subscription state transitions are strictly reserved for Firebase Admin SDK.
+      allow update: if isOwner(userId) &&
+        isValidUserProfile(request.resource.data) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role',
+          'stripeId',
+          'stripeCustomerId',
+          'subscriptionId',
+          'subscriptionStatus',
+          'subscriptionExpires',
+          'createdAt'
+        ]);
+
+      // Deletion of user profile documents must occur via Admin SDK backend
+      allow delete: if false;
+
+      // Solo/Free tier personal atoms captured in the field
+      match /atoms/{atomId} {
+        allow read, delete: if isOwner(userId);
+
+        allow create: if isOwner(userId) &&
+          isValidPersonalAtom(request.resource.data);
+
+        allow update: if isOwner(userId) &&
+          isValidPersonalAtom(request.resource.data) &&
+          request.resource.data.createdAt == resource.data.createdAt;
+      }
+    }
+
+    // ===============================================================
+    // Rules: Multi-Tenant Organizations & Workspaces
+    // ===============================================================
+
+    match /tenants/{tenantId} {
+      // Tenant metadata is readable by verified members of this tenant
+      allow read: if isTenantMember(tenantId);
+
+      // Any authenticated user can provision a new tenant, setting themselves as owner
+      allow create: if isAuthenticated() &&
+        isValidTenant(request.resource.data) &&
+        request.resource.data.ownerId == request.auth.uid;
+
+      // Tenant settings can only be updated by tenant owner or admin; ownerId & createdAt are immutable
+      allow update: if isTenantAdmin(tenantId) &&
+        isValidTenant(request.resource.data) &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.createdAt == resource.data.createdAt;
+
+      // Only tenant owner can delete the organization
+      allow delete: if isTenantOwner(tenantId);
+
+      // -------------------------------------------------------------
+      // Subcollection: Tenant Membership & RBAC
+      // -------------------------------------------------------------
+      match /members/{memberId} {
+        // All tenant members can inspect member list
+        allow read: if isTenantMember(tenantId);
+
+        // Membership creation:
+        // 1. Initial tenant creator setting themselves up as the initial 'owner'
+        // 2. Tenant owner appointing any valid role
+        // 3. Tenant admin appointing admins, operators, or viewers (CANNOT appoint owners)
+        allow create: if isAuthenticated() &&
+          isValidTenantMember(request.resource.data) &&
+          (
+            (request.auth.uid == memberId &&
+             request.resource.data.role == 'owner' &&
+             isInitialTenantOwner(tenantId)) ||
+            isTenantOwner(tenantId) ||
+            (isTenantAdmin(tenantId) && request.resource.data.role != 'owner')
+          );
+
+        // Membership update:
+        // - Tenant owner can update any member role
+        // - Tenant admin can only update non-owner members and cannot promote to owner
+        // - joinedAt timestamp is strictly immutable
+        allow update: if isAuthenticated() &&
+          isValidTenantMember(request.resource.data) &&
+          request.resource.data.joinedAt == resource.data.joinedAt &&
+          (
+            isTenantOwner(tenantId) ||
+            (isTenantAdmin(tenantId) &&
+             resource.data.role != 'owner' &&
+             request.resource.data.role != 'owner')
+          );
+
+        // Membership deletion:
+        // - Tenant owner can remove any member
+        // - Tenant admin can remove non-owner members (AN OWNER CANNOT BE REMOVED BY AN ADMIN)
+        allow delete: if isAuthenticated() &&
+          (
+            isTenantOwner(tenantId) ||
+            (isTenantAdmin(tenantId) && resource.data.role != 'owner')
+          );
+      }
+
+      // -------------------------------------------------------------
+      // Subcollection: Shared Tenant Atoms (Tasks / Field Logs)
+      // -------------------------------------------------------------
+      match /atoms/{atomId} {
+        // Read: Accessible by all tenant members (owner, admin, operator, viewer)
+        allow read: if isTenantMember(tenantId);
+
+        // Create: Operators, admins, and owners can capture atoms.
+        // Requires valid schema and strict attribution to the authenticated user.
+        allow create: if isTenantOperator(tenantId) &&
+          isValidTenantAtom(request.resource.data) &&
+          request.resource.data.authorId == request.auth.uid;
+
+        // Update: Owner, admin, or the original operator author can update atom.
+        // authorId and createdAt fields are strictly immutable.
+        allow update: if (isTenantAdmin(tenantId) ||
+                          (isTenantOperator(tenantId) && resource.data.authorId == request.auth.uid)) &&
+          isValidTenantAtom(request.resource.data) &&
+          request.resource.data.authorId == resource.data.authorId &&
+          request.resource.data.createdAt == resource.data.createdAt;
+
+        // Delete: Restricted to tenant owners and admins (operators cannot delete shared atoms)
+        allow delete: if isTenantAdmin(tenantId);
+      }
+
+      // -------------------------------------------------------------
+      // Subcollection: Tenant Entities (@entities catalog)
+      // -------------------------------------------------------------
+      match /entities/{entityId} {
+        // Read: Accessible by all tenant members
+        allow read: if isTenantMember(tenantId);
+
+        // Create: Operators, admins, and owners can register entities.
+        // Strict creator attribution enforced.
+        allow create: if isTenantOperator(tenantId) &&
+          isValidTenantEntity(request.resource.data) &&
+          request.resource.data.createdBy == request.auth.uid;
+
+        // Update: Operators, admins, and owners can update entity details.
+        // createdBy and createdAt fields are strictly immutable.
+        allow update: if isTenantOperator(tenantId) &&
+          isValidTenantEntity(request.resource.data) &&
+          request.resource.data.createdBy == resource.data.createdBy &&
+          request.resource.data.createdAt == resource.data.createdAt;
+
+        // Delete: Restricted to tenant owners and admins
+        allow delete: if isTenantAdmin(tenantId);
+      }
+    }
+  }
+}
