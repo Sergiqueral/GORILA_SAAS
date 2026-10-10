@@ -38,9 +38,10 @@ import {
 } from "lucide-react";
 
 export default function DashboardPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, signOut } = useAuth();
   const { tenant, currentRole } = useTenant();
   const router = useRouter();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   // Estados de la Omnibarra
   const [inputValue, setInputValue] = useState("");
@@ -64,6 +65,19 @@ export default function DashboardPage() {
       router.push("/login");
     }
   }, [user, loading, router]);
+
+  const handleSignOut = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await signOut();
+    } catch (err) {
+      console.error("[Auth] Error al cerrar sesión:", err);
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
+  };
 
   // Detectar retorno de pago desde Stripe (?payment=success o ?payment=cancelled)
   useEffect(() => {
@@ -439,11 +453,16 @@ export default function DashboardPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => auth.signOut()}
+              disabled={isLoggingOut}
+              onClick={handleSignOut}
               className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 gap-1.5 text-xs font-mono"
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Salir</span>
+              {isLoggingOut ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <LogOut className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">{isLoggingOut ? "Saliendo..." : "Salir"}</span>
             </Button>
           </div>
         </header>

@@ -46,7 +46,8 @@ type ActiveTab = "profile" | "company" | "team" | "permissions" | "billing";
 
 export default function ClientSettingsDashboard() {
   const router = useRouter();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, signOut } = useAuth();
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const {
     userProfile,
     tenant,
@@ -89,6 +90,26 @@ export default function ClientSettingsDashboard() {
   const setIsCheckingOut = setIsLoading;
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
 
+
+  // Redirección si no está autenticado
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push("/login");
+    }
+  }, [user, authLoading, router]);
+
+  const handleSignOut = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await signOut();
+    } catch (err) {
+      console.error("[Auth] Error al cerrar sesión:", err);
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
+  };
 
   // Inicializar estados locales cuando los datos carguen
   useEffect(() => {
@@ -395,11 +416,16 @@ export default function ClientSettingsDashboard() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => auth.signOut()}
+              disabled={isLoggingOut}
+              onClick={handleSignOut}
               className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 gap-1.5 text-xs font-mono"
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Salir</span>
+              {isLoggingOut ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <LogOut className="h-3.5 w-3.5" />
+              )}
+              <span className="hidden sm:inline">{isLoggingOut ? "Saliendo..." : "Salir"}</span>
             </Button>
           </div>
         </header>

@@ -1,14 +1,19 @@
 "use client";
 import { useEffect, useState, createContext, useContext } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
+import { onAuthStateChanged, User, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../firebase/config';
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  signOut: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, loading: true });
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  loading: true,
+  signOut: async () => {},
+});
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -23,7 +28,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  return <AuthContext.Provider value={{ user, loading }}>{children}</AuthContext.Provider>;
+  const signOut = async () => {
+    try {
+      await firebaseSignOut(auth);
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("gorila_active_tenant");
+        window.location.href = "/login";
+      }
+    } catch (error) {
+      console.error("[Auth] Error al cerrar sesión:", error);
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }
+  };
+
+  return <AuthContext.Provider value={{ user, loading, signOut }}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);
