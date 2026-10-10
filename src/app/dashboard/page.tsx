@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { parseOmnibarInput, ParsedAtom, AtomTimeSchedule, ensureAtomSchedule } from "@/lib/omnibarParser";
-import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { Entity360Inspector } from "@/components/Entity360Inspector";
 import { AtomicCalendar } from "@/components/AtomicCalendar";
 import { getActiveEntities } from "@/lib/graphEngine";
@@ -202,21 +202,28 @@ export default function DashboardPage() {
     const duration = Math.round(performance.now() - startTime);
     setLastCaptureTime(duration);
 
-    // 2. Sincronización asíncrona de fondo con Firestore si está conectado
+    // 2. Sincronización asíncrona de fondo con Firestore (Soberanía del Dato: atoms/{atomId} con tenant_id)
     if (user?.uid) {
-      try {
-        await addDoc(collection(db, `users/${user.uid}/atoms`), {
-          rawText: newAtom.rawText,
-          cleanText: newAtom.cleanText,
-          entities: newAtom.entities,
-          times: newAtom.times,
-          tags: newAtom.tags,
-          createdAt: serverTimestamp(),
-          completed: false,
-        });
-      } catch (err) {
-        console.warn("Sincronización en segundo plano pendiente:", err);
-      }
+      const tenantId = tenant?.id || `tenant_${user.uid}`;
+      const atomDocRef = doc(db, "atoms", newAtom.id);
+      setDoc(atomDocRef, {
+        id: newAtom.id,
+        tenant_id: tenantId,
+        authorId: user.uid,
+        authorEmail: user.email || null,
+        rawText: newAtom.rawText,
+        cleanText: newAtom.cleanText,
+        entities: newAtom.entities,
+        times: newAtom.times,
+        tags: newAtom.tags,
+        schedule: newAtom.schedule,
+        timestamp: formattedTime,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        completed: false,
+      }).catch((err) => {
+        console.warn("[Gorila Codex] Sincronización Firestore en segundo plano diferida:", err);
+      });
     }
   };
 

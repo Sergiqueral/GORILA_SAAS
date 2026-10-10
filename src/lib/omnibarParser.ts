@@ -74,7 +74,17 @@ export function inferAtomSchedule(times: string[], fallbackTimestamp = Date.now(
     sábado: 6,
   };
 
-  for (const rawToken of times) {
+  // Descomponer tokens compuestos (ej: "mañana 10:00" -> ["mañana", "10:00"])
+  const flatTokens: string[] = [];
+  for (const t of times) {
+    if (t.includes(" ")) {
+      flatTokens.push(...t.split(/\s+/));
+    } else {
+      flatTokens.push(t);
+    }
+  }
+
+  for (const rawToken of flatTokens) {
     const token = rawToken.toLowerCase().trim();
 
     // 1. Días relativos
@@ -180,9 +190,11 @@ export function parseOmnibarInput(input: string): ParseResult {
     };
   }
 
-  // Regex para tokens: soporta letras, números, guiones, barras y tildes
+  // Regex para tokens: soporta letras, números, guiones, barras, tildes y expresiones temporales compuestas
+  const TIME_TOKEN_REGEX = /\/\/([a-zA-Z0-9_\-:/áéíóúÁÉÍÓÚñÑ]+(?:\s+(?:[0-2]?[0-9](?::[0-5][0-9])?|[0-2]?[0-9]h)(?:-(?:[0-2]?[0-9](?::[0-5][0-9])?|[0-2]?[0-9]h))?)?)/g;
+
   const entityMatches = input.match(/@([a-zA-Z0-9_\-áéíóúÁÉÍÓÚñÑ]+)/g) || [];
-  const timeMatches = input.match(/\/\/([a-zA-Z0-9_\-:/áéíóúÁÉÍÓÚñÑ]+)/g) || [];
+  const timeMatches = input.match(TIME_TOKEN_REGEX) || [];
   const tagMatches = input.match(/#([a-zA-Z0-9_\-áéíóúÁÉÍÓÚñÑ]+)/g) || [];
 
   const entities = Array.from(new Set(entityMatches.map((e) => e.slice(1))));
@@ -193,7 +205,7 @@ export function parseOmnibarInput(input: string): ParseResult {
 
   const cleanText = input
     .replace(/@([a-zA-Z0-9_\-áéíóúÁÉÍÓÚñÑ]+)/g, "")
-    .replace(/\/\/([a-zA-Z0-9_\-:/áéíóúÁÉÍÓÚñÑ]+)/g, "")
+    .replace(TIME_TOKEN_REGEX, "")
     .replace(/#([a-zA-Z0-9_\-áéíóúÁÉÍÓÚñÑ]+)/g, "")
     .replace(/\s+/g, " ")
     .trim();
