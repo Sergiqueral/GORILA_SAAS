@@ -81,8 +81,12 @@ export default function ClientSettingsDashboard() {
   const [isSavingCompany, setIsSavingCompany] = useState(false);
 
   // Estados de FinOps & Stripe (Módulo de Expansión & Portal)
-  const [seatQuantity, setSeatQuantity] = useState<number>(1);
-  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [seatCount, setSeatCount] = useState<number>(1);
+  const seatQuantity = seatCount;
+  const setSeatQuantity = setSeatCount;
+  const [isLoading, setIsLoading] = useState(false);
+  const isCheckingOut = isLoading;
+  const setIsCheckingOut = setIsLoading;
   const [isOpeningPortal, setIsOpeningPortal] = useState(false);
 
 
@@ -1090,31 +1094,62 @@ export default function ClientSettingsDashboard() {
 
                   {/* Botón Táctil de Compra (Modo Outdoor: Alto Contraste, min-h-[48px]) */}
                   <Button
-                    type="button"
-                    onClick={() => handleAddSeatCheckout(seatQuantity)}
-                    disabled={isCheckingOut || !isAdmin}
-                    className={`min-h-[48px] px-6 font-mono font-bold text-xs tracking-wider transition-all ${
-                      outdoorMode
-                        ? "bg-black text-white hover:bg-zinc-800 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]"
-                        : "bg-emerald-600 hover:bg-emerald-700 text-white shadow-md active:scale-95"
-                    }`}
+                    disabled={isLoading || !isOwner}
+                    onClick={async () => {
+                      try {
+                        setIsLoading(true);
+
+                        // Validación de Seguridad
+                        if (!isOwner) throw new Error("Solo el propietario puede gestionar la facturación");
+                        if (!tenant?.id) throw new Error("No se detectó el identificador del espacio de trabajo");
+
+                        const res = await fetch("/api/checkout", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            priceId: "price_1UP8klLDAGQuuEjm755xMMmm", // Tu ID real de Stripe
+                            additionalSeats: seatCount,
+                            tenantId: tenant.id,
+                            userId: user?.uid,
+                            userEmail: user?.email,
+                            customerId:
+                              tenant.stripeCustomerId ||
+                              tenant.stripe_customer_id ||
+                              tenant.subscription?.stripeCustomerId,
+                          }),
+                        });
+
+                        const data = await res.json();
+
+                        if (!res.ok) throw new Error(data.error || "Error al conectar con Stripe");
+                        if (data.url) window.location.href = data.url; // Redirección nativa a Stripe Checkout
+                      } catch (error: any) {
+                        console.error("[FinOps] Error en Checkout:", error);
+                        alert(error.message); // O usa un toast de shadcn-ui
+                      } finally {
+                        setIsLoading(false);
+                      }
+                    }}
+                    className="h-8 gap-1.5 min-h-[48px] px-6 font-mono font-bold text-xs tracking-wider transition-all bg-black text-white hover:bg-zinc-800 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px]"
                   >
-                    {isCheckingOut ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        <span>Conectando con Stripe...</span>
-                      </>
+                    {isLoading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     ) : (
-                      <>
-                        <UserPlus className="h-4 w-4 mr-2" />
-                        <span>
-                          Añadir {seatQuantity} Usuario{seatQuantity > 1 ? "s" : ""} (+{(seatQuantity * 10).toFixed(2)} €/mes)
-                        </span>
-                      </>
+                      <UserPlus className="h-4 w-4 mr-2" />
                     )}
+                    <span>Añadir {seatCount} Usuario{seatCount > 1 ? "s" : ""} (+{(seatCount * 10).toFixed(2)} €/mes)</span>
                   </Button>
                 </div>
               </div>
+
+              {!isOwner && (
+                <div className="mt-3 flex items-center gap-2 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 rounded-xl text-amber-800 dark:text-amber-300 text-xs font-mono">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>
+                    Soberanía de Roles: Solo el Propietario (owner) puede añadir licencias. Rol detectado en este espacio de trabajo: <strong>{currentRole}</strong>.
+                  </span>
+                </div>
+              )}
 
               <div className="pt-4 flex flex-wrap items-center gap-2 text-xs font-mono text-zinc-500">
                 <span>Acceso rápido:</span>
