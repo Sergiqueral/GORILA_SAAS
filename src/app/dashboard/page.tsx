@@ -13,6 +13,7 @@ import { parseOmnibarInput, ParsedAtom, AtomTimeSchedule, ensureAtomSchedule } f
 import { collection, addDoc, doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { Entity360Inspector } from "@/components/Entity360Inspector";
 import { AtomicCalendar } from "@/components/AtomicCalendar";
+import { ImpersonationBanner } from "@/components/ImpersonationBanner";
 import { getActiveEntities } from "@/lib/graphEngine";
 import {
   Zap,
@@ -318,13 +319,14 @@ export default function DashboardPage() {
 
   return (
     <div
-      className={`min-h-screen transition-colors duration-200 p-4 sm:p-6 md:p-10 flex flex-col items-center ${
+      className={`min-h-screen transition-colors duration-200 flex flex-col items-center ${
         outdoorMode
           ? "bg-white text-black font-sans selection:bg-black selection:text-white"
           : "bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100"
       }`}
     >
-      <div className="w-full max-w-4xl space-y-8 pt-8 md:pt-14">
+      <ImpersonationBanner />
+      <div className="w-full max-w-4xl space-y-8 p-4 sm:p-6 md:p-10 pt-6 md:pt-10">
         
         {/* Banner de Notificación de Retorno de Stripe */}
         {checkoutNotification === "success" && (

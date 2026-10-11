@@ -16,7 +16,7 @@ import {
 } from "firebase/firestore";
 import { Tenant, TenantMember, TenantRole, UserProfile } from "@/types/tenant";
 import { ensureUserWorkspace } from "@/lib/workspace-bootstrap";
-
+import { isSuperAdminEmail } from "@/lib/superadmin";
 
 export function useTenant() {
   const { user, loading: authLoading } = useAuth();
@@ -27,6 +27,7 @@ export function useTenant() {
   const [currentRole, setCurrentRole] = useState<TenantRole>("viewer");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState<boolean>(false);
 
   // Cargar perfil del usuario y su organización activa
   const loadTenantData = useCallback(async () => {
@@ -65,20 +66,35 @@ export function useTenant() {
       }
       setUserProfile(profileData);
 
+      const isSuperAdmin = isSuperAdminEmail(user.email);
+
       // 2. Resolver el Tenant ID (priorizando selección activa en localStorage, perfil, o por defecto tenant_{uid})
-      const savedTenant = typeof window !== "undefined" ? localStorage.getItem("gorila_active_tenant") : null;
-      const targetTenantId =
+      let savedTenant = typeof window !== "undefined" ? localStorage.getItem("gorila_active_tenant") : null;
+      let targetTenantId =
         savedTenant ||
         profileData.tenantId ||
         `tenant_${user.uid}`;
 
       // 3. Obtener datos de la empresa (Tenant)
-      const tenantRef = doc(db, "tenants", targetTenantId);
-      const tenantSnap = await getDoc(tenantRef);
+      let tenantRef = doc(db, "tenants", targetTenantId);
+      let tenantSnap = await getDoc(tenantRef);
+
+      // Sanity check: Si savedTenant está configurado pero no existe y no es SuperAdmin
+      if (savedTenant && savedTenant !== profileData.tenantId && !isSuperAdmin) {
+        if (!tenantSnap.exists()) {
+          console.warn(`[useTenant] Limpiando gorila_active_tenant inexistente: ${savedTenant}`);
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("gorila_active_tenant");
+          }
+          savedTenant = null;
+          targetTenantId = profileData.tenantId || `tenant_${user.uid}`;
+          tenantRef = doc(db, "tenants", targetTenantId);
+          tenantSnap = await getDoc(tenantRef);
+        }
+      }
 
       if (tenantSnap.exists()) {
         const tenantData = { id: tenantSnap.id, ...tenantSnap.data() } as Tenant;
-        setTenant(tenantData);
 
         // 4. Obtener miembros de la organización
         const membersRef = collection(db, `tenants/${targetTenantId}/members`);
@@ -89,14 +105,52 @@ export function useTenant() {
           memberList.push({ id: mDoc.id, ...mDoc.data() } as TenantMember);
         });
 
+        // Comprobar si el usuario actual es dueño o miembro legítimo
+        const cleanUserEmail = (user.email || "").toLowerCase().trim();
+        const myMemberRecord = memberList.find(
+          (m) => m.id === user.uid || (cleanUserEmail && m.email?.toLowerCase().trim() === cleanUserEmail)
+        );
+        const isLegitOwner = tenantData.ownerId === user.uid || targetTenantId === `tenant_${user.uid}`;
+
+        // Si un usuario normal (no SuperAdmin) tiene en localStorage un tenant ajeno donde no es ni dueño ni miembro:
+        if (savedTenant && savedTenant !== profileData.tenantId && !isSuperAdmin && !isLegitOwner && !myMemberRecord) {
+          console.warn(`[useTenant] Auto-limpieza de gorila_active_tenant ajeno (${savedTenant}) para ${user.email}`);
+          if (typeof window !== "undefined") {
+            localStorage.removeItem("gorila_active_tenant");
+          }
+          savedTenant = null;
+          targetTenantId = profileData.tenantId || `tenant_${user.uid}`;
+
+          // Cargar el tenant propio del usuario
+          tenantRef = doc(db, "tenants", targetTenantId);
+          tenantSnap = await getDoc(tenantRef);
+
+          if (tenantSnap.exists()) {
+            const ownTenantData = { id: tenantSnap.id, ...tenantSnap.data() } as Tenant;
+            setTenant(ownTenantData);
+            const ownMembersSnap = await getDocs(collection(db, `tenants/${targetTenantId}/members`));
+            const ownMemberList: TenantMember[] = [];
+            ownMembersSnap.forEach((m) => ownMemberList.push({ id: m.id, ...m.data() } as TenantMember));
+            setMembers(ownMemberList);
+            setCurrentRole("owner");
+            setIsImpersonating(false);
+            return;
+          }
+        }
+
+        setTenant(tenantData);
         setMembers(memberList);
 
+        const impersonatingActive = !!(savedTenant && (savedTenant !== profileData.tenantId || (isSuperAdmin && targetTenantId !== `tenant_${user.uid}`)));
+        setIsImpersonating(impersonatingActive);
+
         // 5. Determinar el rol del usuario en la organización
-        const isUserOwner = tenantData.ownerId === user.uid || targetTenantId === `tenant_${user.uid}`;
+        // SuperAdmin en God Mode siempre tiene derechos plenos de Propietario (owner)
+        const isUserOwner = isSuperAdmin || isLegitOwner;
         if (isUserOwner) {
           setCurrentRole("owner");
-          // Si el miembro no está registrado en el subcollection, auto-repararlo en Firestore
-          if (!memberList.some((m) => m.id === user.uid)) {
+          // Si el miembro legítimo no está registrado en el subcollection, auto-repararlo en Firestore
+          if (isLegitOwner && !memberList.some((m) => m.id === user.uid)) {
             const ownerMember: TenantMember = {
               id: user.uid,
               email: user.email || profileData.email || "",
@@ -115,10 +169,6 @@ export function useTenant() {
             }).catch((e) => console.warn("[useTenant] Auto-repair owner member:", e));
           }
         } else {
-          const cleanUserEmail = (user.email || "").toLowerCase().trim();
-          const myMemberRecord = memberList.find(
-            (m) => m.id === user.uid || (cleanUserEmail && m.email?.toLowerCase().trim() === cleanUserEmail)
-          );
           setCurrentRole(myMemberRecord?.role || "viewer");
         }
       } else {
@@ -354,15 +404,28 @@ export function useTenant() {
     }
   };
 
+  // Salir del modo auditoría / impersonación y regresar al espacio propio
+  const exitImpersonation = () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("gorila_active_tenant");
+      window.location.reload();
+    }
+  };
+
+  const isSuperAdmin = isSuperAdminEmail(user?.email);
+
   return {
     user,
     userProfile,
     tenant,
     members,
     currentRole,
-    isOwner: currentRole === "owner",
-    isAdmin: currentRole === "owner" || currentRole === "admin",
-    isOperator: currentRole === "owner" || currentRole === "admin" || currentRole === "operator",
+    isOwner: isSuperAdmin || currentRole === "owner",
+    isAdmin: isSuperAdmin || currentRole === "owner" || currentRole === "admin",
+    isOperator: isSuperAdmin || currentRole === "owner" || currentRole === "admin" || currentRole === "operator",
+    isSuperAdmin,
+    isImpersonating,
+    exitImpersonation,
     loading: authLoading || loading,
     error,
     refreshTenant: loadTenantData,
