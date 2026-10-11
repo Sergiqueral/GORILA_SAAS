@@ -1,3 +1,4 @@
+import "@/lib/server-polyfill";
 import { adminAuth } from '@/firebase/admin';
 import { isSuperAdminEmail } from '@/lib/superadmin';
 

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifySuperAdmin } from '@/lib/superadmin-server';
-import { firestore } from '@/firebase/admin';
+import { firestore, getFirestoreDb } from '@/firebase/admin';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -12,7 +12,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: auth.error || 'No autorizado' }, { status: 403 });
     }
 
-    if (!firestore) {
+    const db = getFirestoreDb() || firestore;
+    if (!db) {
       return NextResponse.json(
         { error: 'Firebase Admin SDK no está disponible en el servidor' },
         { status: 503 }
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const tenantRef = firestore.collection('tenants').doc(tenantId);
+    const tenantRef = db.collection('tenants').doc(tenantId);
     const tenantDoc = await tenantRef.get();
 
     if (!tenantDoc.exists) {
@@ -43,14 +44,14 @@ export async function POST(req: Request) {
     const oldOwnerId = tenantData.ownerId;
 
     // Buscar datos del nuevo propietario
-    const newOwnerRef = firestore.collection('users').doc(newOwnerUid);
+    const newOwnerRef = db.collection('users').doc(newOwnerUid);
     const newOwnerDoc = await newOwnerRef.get();
 
     const newOwnerData = newOwnerDoc.exists ? newOwnerDoc.data() || {} : {};
     const newOwnerEmail = newOwnerData.email || 'operario@gorila.saas';
     const newOwnerName = newOwnerData.displayName || newOwnerEmail.split('@')[0];
 
-    const batch = firestore.batch();
+    const batch = db.batch();
 
     // 1. Actualizar ownerId en el documento del Tenant
     batch.update(tenantRef, {

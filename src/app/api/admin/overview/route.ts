@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifySuperAdmin } from '@/lib/superadmin-server';
-import { firestore } from '@/firebase/admin';
+import { firestore, getFirestoreDb } from '@/firebase/admin';
 import { Tenant, UserProfile, TenantMember } from '@/types/tenant';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,8 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: auth.error || 'No autorizado' }, { status: 403 });
     }
 
-    if (!firestore) {
+    const db = getFirestoreDb() || firestore;
+    if (!db) {
       return NextResponse.json(
         {
           error: 'FIREBASE_ADMIN_NOT_CONFIGURED',
@@ -26,11 +27,11 @@ export async function GET(req: Request) {
     }
 
     // 1. Obtener todos los espacios de trabajo (tenants)
-    const tenantsSnap = await firestore.collection('tenants').get();
+    const tenantsSnap = await db.collection('tenants').get();
     const tenants: (Tenant & { membersCount?: number; ownerEmail?: string })[] = [];
 
     // 2. Obtener todos los usuarios registrados
-    const usersSnap = await firestore.collection('users').get();
+    const usersSnap = await db.collection('users').get();
     const users: (UserProfile & { uid: string })[] = [];
 
     const userEmailMap = new Map<string, string>();

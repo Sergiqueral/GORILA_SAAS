@@ -36,6 +36,12 @@ firebase-debug.*.log
 .env*.local
 .env.local
 
+# service account secrets
+*service-account*.json
+*serviceAccount*.json
+serviceAccountKey.json
+firebase-admin-key.json
+
 # vercel
 .vercel
 

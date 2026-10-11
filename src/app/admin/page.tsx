@@ -96,9 +96,16 @@ export default function SuperAdminPage() {
         },
       });
 
-      const json = await res.json();
+      const rawText = await res.text();
+      let json: any = {};
+      try {
+        json = JSON.parse(rawText);
+      } catch {
+        throw new Error(`Respuesta inválida del servidor (HTTP ${res.status}): Comprueba la consola del servidor.`);
+      }
+
       if (!res.ok) {
-        throw new Error(json.message || json.error || "Error al conectar con el Cerebro Admin");
+        throw new Error(json.message || json.error || `Error ${res.status}: Fallo al conectar con el Cerebro Admin`);
       }
 
       setData(json);

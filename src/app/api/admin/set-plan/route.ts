@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { verifySuperAdmin } from '@/lib/superadmin-server';
-import { firestore } from '@/firebase/admin';
+import { firestore, getFirestoreDb } from '@/firebase/admin';
 import { TenantSubscription } from '@/types/tenant';
 
 export const dynamic = 'force-dynamic';
@@ -13,7 +13,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: auth.error || 'No autorizado' }, { status: 403 });
     }
 
-    if (!firestore) {
+    const db = getFirestoreDb() || firestore;
+    if (!db) {
       return NextResponse.json(
         { error: 'Firebase Admin SDK no está disponible en el servidor' },
         { status: 503 }
@@ -30,7 +31,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const tenantRef = firestore.collection('tenants').doc(tenantId);
+    const tenantRef = db.collection('tenants').doc(tenantId);
     const tenantDoc = await tenantRef.get();
 
     if (!tenantDoc.exists) {
