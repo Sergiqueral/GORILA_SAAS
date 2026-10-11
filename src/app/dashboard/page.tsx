@@ -35,7 +35,9 @@ import {
   ListOrdered,
   Building2,
   Settings,
+  Crown,
 } from "lucide-react";
+import { isSuperAdminEmail } from "@/lib/superadmin";
 
 export default function DashboardPage() {
   const { user, loading, signOut } = useAuth();
@@ -396,6 +398,21 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2 self-end sm:self-auto">
+            {/* Acceso Directo SuperAdmin (God Mode) */}
+            {isSuperAdminEmail(user?.email) && (
+              <Link href="/admin">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-amber-400 hover:bg-amber-300 text-black border-2 border-black font-mono text-xs font-bold gap-1.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all"
+                  title="Centro de Mando SuperAdmin / Plataforma"
+                >
+                  <Crown className="h-3.5 w-3.5" />
+                  <span>SuperAdmin</span>
+                </Button>
+              </Link>
+            )}
+
             {/* Gestión de Empresa & Perfil */}
             <Link href="/dashboard/settings">
               <Button

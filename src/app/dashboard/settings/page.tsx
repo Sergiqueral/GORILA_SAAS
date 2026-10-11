@@ -40,6 +40,7 @@ import {
   TrendingUp,
   UserPlus,
 } from "lucide-react";
+import { isSuperAdminEmail } from "@/lib/superadmin";
 import { auth } from "@/firebase/config";
 
 type ActiveTab = "profile" | "company" | "team" | "permissions" | "billing";
@@ -397,6 +398,21 @@ export default function ClientSettingsDashboard() {
           </div>
 
           <div className="flex items-center gap-2 self-end sm:self-auto">
+            {/* Acceso Directo SuperAdmin (God Mode) */}
+            {isSuperAdminEmail(user?.email) && (
+              <Link href="/admin">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="bg-amber-400 hover:bg-amber-300 text-black border-2 border-black font-mono text-xs font-bold gap-1.5 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all"
+                  title="Centro de Mando SuperAdmin / Plataforma"
+                >
+                  <Crown className="h-3.5 w-3.5" />
+                  <span>SuperAdmin</span>
+                </Button>
+              </Link>
+            )}
+
             {/* Toggle Outdoor Mode */}
             <Button
               variant={outdoorMode ? "default" : "outline"}

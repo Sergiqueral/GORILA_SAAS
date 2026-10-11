@@ -63,10 +63,11 @@ export function useTenant() {
       }
       setUserProfile(profileData);
 
-      // 2. Resolver el Tenant ID (desde perfil, o localStorage, o por defecto tenant_{uid})
+      // 2. Resolver el Tenant ID (priorizando selección activa en localStorage, perfil, o por defecto tenant_{uid})
+      const savedTenant = typeof window !== "undefined" ? localStorage.getItem("gorila_active_tenant") : null;
       const targetTenantId =
+        savedTenant ||
         profileData.tenantId ||
-        localStorage.getItem("gorila_active_tenant") ||
         `tenant_${user.uid}`;
 
       // 3. Obtener datos de la empresa (Tenant)
@@ -319,6 +320,14 @@ export function useTenant() {
     }
   };
 
+  // Cambiar rápidamente de espacio de trabajo / organización
+  const switchTenant = (tenantId: string) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("gorila_active_tenant", tenantId);
+      loadTenantData();
+    }
+  };
+
   return {
     user,
     userProfile,
@@ -331,6 +340,7 @@ export function useTenant() {
     loading: authLoading || loading,
     error,
     refreshTenant: loadTenantData,
+    switchTenant,
     bootstrapTenant,
     updateTenant,
     updateUserProfile,
