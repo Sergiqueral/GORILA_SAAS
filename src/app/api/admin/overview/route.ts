@@ -48,9 +48,16 @@ export async function GET(req: Request) {
     for (const tDoc of tenantsSnap.docs) {
       const data = tDoc.data() as Tenant;
       let membersCount = 0;
+      const memberList: TenantMember[] = [];
       try {
         const membersSnap = await tDoc.ref.collection('members').get();
         membersCount = membersSnap.size;
+        membersSnap.forEach((mDoc) => {
+          memberList.push({
+            id: mDoc.id,
+            ...(mDoc.data() as any),
+          });
+        });
       } catch (err) {
         // Fallback silencioso
       }
@@ -59,8 +66,9 @@ export async function GET(req: Request) {
         ...data,
         id: tDoc.id,
         membersCount,
+        members: memberList,
         ownerEmail: userEmailMap.get(data.ownerId) || data.email || 'Desconocido',
-      });
+      } as any);
     }
 
     // Ordenar tenants por fecha de creación descendente

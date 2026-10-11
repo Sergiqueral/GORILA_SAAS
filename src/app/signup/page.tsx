@@ -62,6 +62,11 @@ function SignupContent() {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
 
+      // Limpiar cualquier tenant residual de sesiones de prueba previas si es registro directo
+      if (!invitedTenantId && typeof window !== 'undefined') {
+        localStorage.removeItem('gorila_active_tenant');
+      }
+
       // Garantizar Workspace Soberano como Propietario (o unirse si fue invitado)
       await ensureUserWorkspace(user, { invitedTenantId });
 
@@ -92,6 +97,11 @@ function SignupContent() {
 
     setIsLoading(true)
     try {
+      // Limpiar cualquier tenant residual de sesiones de prueba previas si es registro directo
+      if (!invitedTenantId && typeof window !== 'undefined') {
+        localStorage.removeItem('gorila_active_tenant');
+      }
+
       // Registro directo con Firebase Client SDK (Fricción Cero)
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       const user = userCredential.user

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { isSuperAdminEmail } from "@/lib/superadmin";
-import { Tenant, UserProfile } from "@/types/tenant";
+import { Tenant, UserProfile, TenantMember, TenantRole } from "@/types/tenant";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -44,7 +44,7 @@ interface AdminOverviewData {
     totalAdditionalSeats: number;
     estimatedMrr: number;
   };
-  tenants: (Tenant & { membersCount?: number; ownerEmail?: string })[];
+  tenants: (Tenant & { membersCount?: number; ownerEmail?: string; members?: TenantMember[] })[];
   users: (UserProfile & { uid: string })[];
 }
 
@@ -70,6 +70,13 @@ export default function SuperAdminPage() {
   const [selectedPlan, setSelectedPlan] = useState<"Free" | "Pro">("Pro");
   const [additionalSeatsInput, setAdditionalSeatsInput] = useState<number>(0);
   const [isSubmittingPlan, setIsSubmittingPlan] = useState(false);
+
+  // Estados del modal de Modificar Rol de Usuario
+  const [roleModalUser, setRoleModalUser] = useState<(UserProfile & { uid: string }) | null>(null);
+  const [selectedRoleTenantId, setSelectedRoleTenantId] = useState<string>("");
+  const [selectedRole, setSelectedRole] = useState<TenantRole>("owner");
+  const [selectedGlobalRole, setSelectedGlobalRole] = useState<string>("Free User");
+  const [isSubmittingRole, setIsSubmittingRole] = useState(false);
 
   // Notificación de acción realizada
   const [actionNotification, setActionNotification] = useState<{
@@ -219,6 +226,81 @@ export default function SuperAdminPage() {
       });
     } finally {
       setIsSubmittingPlan(false);
+    }
+  };
+
+  // Abrir modal de gestión de rol de usuario
+  const handleOpenRoleModal = (targetUser: UserProfile & { uid: string }) => {
+    setRoleModalUser(targetUser);
+    const initialTenantId = targetUser.tenantId || (data?.tenants[0]?.id || "");
+    setSelectedRoleTenantId(initialTenantId);
+
+    // Determinar el rol actual en ese tenant si existe
+    const targetTenant = data?.tenants.find((t) => t.id === initialTenantId);
+    const memberRecord = targetTenant?.members?.find((m) => m.id === targetUser.uid);
+    if (memberRecord) {
+      setSelectedRole(memberRecord.role);
+    } else if (targetTenant?.ownerId === targetUser.uid) {
+      setSelectedRole("owner");
+    } else {
+      setSelectedRole("owner");
+    }
+
+    setSelectedGlobalRole(targetUser.role || "Free User");
+  };
+
+  // Cambiar el tenant seleccionado en el modal de rol
+  const handleTenantSelectChange = (newTenantId: string) => {
+    setSelectedRoleTenantId(newTenantId);
+    const targetTenant = data?.tenants.find((t) => t.id === newTenantId);
+    const memberRecord = targetTenant?.members?.find((m) => m.id === roleModalUser?.uid);
+    if (memberRecord) {
+      setSelectedRole(memberRecord.role);
+    } else if (targetTenant?.ownerId === roleModalUser?.uid) {
+      setSelectedRole("owner");
+    } else {
+      setSelectedRole("owner");
+    }
+  };
+
+  // Confirmar cambio de rol de usuario y espacio
+  const handleConfirmSetRole = async () => {
+    if (!user || !roleModalUser || !selectedRoleTenantId) return;
+    try {
+      setIsSubmittingRole(true);
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/admin/set-role", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          tenantId: selectedRoleTenantId,
+          uid: roleModalUser.uid,
+          role: selectedRole,
+          globalRole: selectedGlobalRole,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || "Error al actualizar rol del usuario");
+      }
+
+      setActionNotification({
+        type: "success",
+        message: `¡Rol de ${roleModalUser.email} actualizado con éxito a "${selectedRole}" en ${selectedRoleTenantId}!`,
+      });
+      setRoleModalUser(null);
+      fetchOverview(true);
+    } catch (err: any) {
+      setActionNotification({
+        type: "error",
+        message: err?.message || "Error al modificar rol",
+      });
+    } finally {
+      setIsSubmittingRole(false);
     }
   };
 
@@ -624,6 +706,41 @@ export default function SuperAdminPage() {
                         </div>
                       </div>
 
+                      {/* Miembros del Tenant con sus roles */}
+                      {tenant.members && tenant.members.length > 0 && (
+                        <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                          <div className="text-[11px] font-mono text-zinc-400 flex items-center justify-between">
+                            <span className="font-bold flex items-center gap-1">
+                              <Users className="h-3 w-3 text-zinc-500" />
+                              Equipo ({tenant.members.length}):
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {tenant.members.map((m) => (
+                              <span
+                                key={m.id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono bg-zinc-950 border border-zinc-800 text-zinc-200"
+                              >
+                                <span>{m.email || m.displayName || m.id.substring(0, 8)}</span>
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider ${
+                                    m.role === "owner"
+                                      ? "bg-amber-400 text-black font-extrabold"
+                                      : m.role === "admin"
+                                      ? "bg-blue-900/60 text-blue-300 border border-blue-600"
+                                      : m.role === "operator"
+                                      ? "bg-emerald-900/60 text-emerald-300 border border-emerald-600"
+                                      : "bg-zinc-800 text-zinc-400 border border-zinc-700"
+                                  }`}
+                                >
+                                  {m.role}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Datos de FinOps / Stripe vinculados al Tenant */}
                       {(tenant.stripe_customer_id || tenant.stripe_subscription_id) && (
                         <div className="pt-2 border-t border-zinc-800/80 flex flex-wrap items-center justify-between text-xs font-mono text-zinc-400 gap-2">
@@ -685,6 +802,7 @@ export default function SuperAdminPage() {
                         <th className="p-3.5 font-bold">Rol Global</th>
                         <th className="p-3.5 font-bold">Tenant Activo</th>
                         <th className="p-3.5 font-bold">Registro</th>
+                        <th className="p-3.5 font-bold text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800">
@@ -746,6 +864,19 @@ export default function SuperAdminPage() {
 
                           <td className="p-3.5 text-zinc-400">
                             {u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "N/A"}
+                          </td>
+
+                          <td className="p-3.5 text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleOpenRoleModal(u)}
+                              className="bg-zinc-950 border-2 border-amber-500/70 hover:bg-amber-400 hover:text-black hover:border-amber-400 font-mono text-xs font-semibold h-8 gap-1.5 transition-all shadow-sm"
+                              title="Cambiar rol (Owner, Admin, Operator, Viewer) o asignar a otra empresa"
+                            >
+                              <UserCheck className="h-3.5 w-3.5 text-amber-400 group-hover:text-black" />
+                              <span>Gestionar Rol</span>
+                            </Button>
                           </td>
                         </tr>
                       ))}
@@ -1014,6 +1145,175 @@ export default function SuperAdminPage() {
                     </>
                   ) : (
                     "Guardar Plan"
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* MODAL 3: MODIFICAR ROL DE USUARIO Y ESPACIO                       */}
+        {/* ================================================================= */}
+        {roleModalUser && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-zinc-900 border-2 border-amber-400 w-full max-w-lg rounded-2xl p-6 space-y-6 shadow-2xl font-mono">
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <UserCheck className="h-5 w-5 text-amber-400" />
+                    Gestionar Rol y Organización
+                  </h3>
+                  <button
+                    onClick={() => setRoleModalUser(null)}
+                    className="text-zinc-400 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <p className="text-xs text-zinc-400">
+                  Usuario: <strong className="text-white">{roleModalUser.email}</strong> ({roleModalUser.displayName || "Sin nombre"})
+                </p>
+                <p className="text-[11px] text-zinc-500">
+                  UID: <code>{roleModalUser.uid}</code>
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {/* 1. SELECCIONAR ESPACIO DE TRABAJO */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-300 font-bold block">
+                    Espacio de Trabajo (Tenant):
+                  </label>
+                  <select
+                    value={selectedRoleTenantId}
+                    onChange={(e) => handleTenantSelectChange(e.target.value)}
+                    className="w-full bg-zinc-950 border-2 border-zinc-700 text-xs font-mono text-zinc-100 p-2.5 rounded-xl focus:border-amber-400 outline-none"
+                  >
+                    {data?.tenants?.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name || "Sin nombre"} (ID: {t.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 2. SELECCIONAR ROL */}
+                <div className="space-y-2">
+                  <label className="text-xs text-zinc-300 font-bold block">
+                    Rol en este Espacio de Trabajo:
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[
+                      {
+                        role: "owner" as TenantRole,
+                        label: "👑 Propietario (Owner)",
+                        desc: "Control total, FinOps, compra de licencias Stripe",
+                        color: "border-amber-400 bg-amber-950/40 text-amber-200",
+                      },
+                      {
+                        role: "admin" as TenantRole,
+                        label: "🛡️ Administrador",
+                        desc: "Gestión de equipo, obras y configuración",
+                        color: "border-blue-500 bg-blue-950/40 text-blue-200",
+                      },
+                      {
+                        role: "operator" as TenantRole,
+                        label: "👷 Operario",
+                        desc: "Trabajo en obra, albaranes, omnibarra",
+                        color: "border-emerald-500 bg-emerald-950/40 text-emerald-200",
+                      },
+                      {
+                        role: "viewer" as TenantRole,
+                        label: "👁️ Lector (Viewer)",
+                        desc: "Solo lectura, sin permisos de mutación",
+                        color: "border-zinc-500 bg-zinc-800 text-zinc-200",
+                      },
+                    ].map((item) => (
+                      <button
+                        key={item.role}
+                        type="button"
+                        onClick={() => setSelectedRole(item.role)}
+                        className={`p-3 rounded-xl border-2 text-left font-mono transition-all flex flex-col gap-1 ${
+                          selectedRole === item.role
+                            ? item.color
+                            : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                        }`}
+                      >
+                        <span className="font-bold text-xs">{item.label}</span>
+                        <span className="text-[10px] text-zinc-400 leading-tight">
+                          {item.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 3. SELECCIONAR ROL GLOBAL */}
+                <div className="space-y-1.5">
+                  <label className="text-xs text-zinc-300 font-bold block">
+                    Rol Global en Plataforma:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGlobalRole("Free User")}
+                      className={`p-2.5 rounded-xl border-2 text-xs font-mono font-bold text-center transition-all ${
+                        selectedGlobalRole === "Free User"
+                          ? "bg-zinc-800 border-white text-white"
+                          : "bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700"
+                      }`}
+                    >
+                      Free User
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedGlobalRole("Pro User")}
+                      className={`p-2.5 rounded-xl border-2 text-xs font-mono font-bold text-center transition-all ${
+                        selectedGlobalRole === "Pro User"
+                          ? "bg-emerald-950/70 border-emerald-400 text-emerald-200"
+                          : "bg-zinc-950 border-zinc-800 text-zinc-500 hover:border-zinc-700"
+                      }`}
+                    >
+                      Pro User
+                    </button>
+                  </div>
+                </div>
+
+                {selectedRole === "owner" && (
+                  <div className="p-3 bg-amber-950/40 border border-amber-500/50 rounded-xl text-[11px] text-amber-200 space-y-1">
+                    <p className="font-bold">⚡ Efectos de promocionar a Propietario (Owner):</p>
+                    <ul className="list-disc pl-4 space-y-0.5 text-zinc-300">
+                      <li>El usuario será el <code className="text-amber-300">ownerId</code> del espacio.</li>
+                      <li>Desbloqueará la compra de asientos en Stripe y la facturación.</li>
+                      <li>Si había otro propietario previo, quedará degradado a Administrador de forma segura.</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setRoleModalUser(null)}
+                  disabled={isSubmittingRole}
+                  className="text-zinc-400 hover:text-white text-xs font-mono"
+                >
+                  Cancelar
+                </Button>
+
+                <Button
+                  onClick={handleConfirmSetRole}
+                  disabled={isSubmittingRole}
+                  className="bg-amber-400 text-black hover:bg-amber-300 border-2 border-black font-bold text-xs font-mono h-10 px-5 shadow-[2px_2px_0px_0px_rgba(255,255,255,1)]"
+                >
+                  {isSubmittingRole ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+                      Guardando...
+                    </>
+                  ) : (
+                    "Guardar Rol"
                   )}
                 </Button>
               </div>
