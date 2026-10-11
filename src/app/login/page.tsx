@@ -1,17 +1,17 @@
-"use client"
+"use client";
 import Navigation from '@/components/Navigation'
 import Link from 'next/link'
-import { useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth'
-import { auth, db } from '@/firebase/config'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { auth } from '@/firebase/config'
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Flame, ArrowLeft } from 'lucide-react'
+import { Flame } from 'lucide-react'
+import { ensureUserWorkspace } from '@/lib/workspace-bootstrap'
 
 function GoogleIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -36,40 +36,35 @@ function GoogleIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-export default function LoginPage() {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false)
-  const router = useRouter()
+function LoginContent() {
+  const searchParams = useSearchParams();
+  const invitedTenantId = searchParams?.get('tenantId') || undefined;
+  const initialEmail = searchParams?.get('email') || "";
+
+  const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (initialEmail) {
+      setEmail(initialEmail);
+    }
+  }, [initialEmail]);
 
   const handleGoogleLogin = async () => {
-    setIsGoogleLoading(true)
+    setIsGoogleLoading(true);
     try {
-      const provider = new GoogleAuthProvider()
-      provider.setCustomParameters({ prompt: 'select_account' })
-      const result = await signInWithPopup(auth, provider)
-      const user = result.user
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
 
-      // Bootstrap de perfil en Firestore si es la primera vez
-      try {
-        const userRef = doc(db, "users", user.uid)
-        const snap = await getDoc(userRef)
-        if (!snap.exists()) {
-          await setDoc(userRef, {
-            email: user.email,
-            displayName: user.displayName || user.email?.split("@")[0] || "Operario",
-            photoURL: user.photoURL || null,
-            role: "Free User",
-            tenantId: `tenant_${user.uid}`,
-            createdAt: Date.now()
-          })
-        }
-      } catch (err) {
-        console.warn("No se pudo verificar o guardar perfil en Firestore:", err)
-      }
+      // Garantizar Workspace Soberano como Propietario (o unirse si fue invitado)
+      await ensureUserWorkspace(user, { invitedTenantId });
 
-      router.push("/dashboard")
+      router.push("/dashboard");
     } catch (error: any) {
       if (error?.code === 'auth/popup-closed-by-user') {
         return
@@ -91,7 +86,11 @@ export default function LoginPage() {
     e.preventDefault()
     setIsLoading(true)
     try {
-      await signInWithEmailAndPassword(auth, email, password)
+      const cred = await signInWithEmailAndPassword(auth, email, password)
+      if (cred.user) {
+        // Garantizar Workspace Soberano como Propietario (o unirse si fue invitado)
+        await ensureUserWorkspace(cred.user, { invitedTenantId })
+      }
       router.push("/dashboard")
     } catch (error: any) {
       console.error('Error signing in', error)
@@ -199,5 +198,19 @@ export default function LoginPage() {
         </div>
       </footer>
     </div>
-  )
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#FFFFFF] text-[#333333] flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#FF6F61]" />
+        </div>
+      }
+    >
+      <LoginContent />
+    </Suspense>
+  );
 }

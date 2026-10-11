@@ -1,17 +1,17 @@
 "use client";
-import { useState } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { auth, db } from '@/firebase/config';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { useRouter } from 'next/navigation';
+import { auth } from '@/firebase/config';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link'
 import { Button } from "@/components/ui/button"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Flame, ArrowLeft } from 'lucide-react'
+import { Flame } from 'lucide-react'
 import Navigation from '@/components/Navigation'
+import { ensureUserWorkspace } from '@/lib/workspace-bootstrap';
 
 function GoogleIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
@@ -36,60 +36,52 @@ function GoogleIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-export default function SignupPage() {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [confirmPassword, setConfirmPassword] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [isGoogleLoading, setIsGoogleLoading] = useState(false)
-  const router = useRouter()
+function SignupContent() {
+  const searchParams = useSearchParams();
+  const invitedTenantId = searchParams?.get('tenantId') || undefined;
+  const initialEmail = searchParams?.get('email') || "";
+
+  const [email, setEmail] = useState(initialEmail);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (initialEmail) {
+      setEmail(initialEmail);
+    }
+  }, [initialEmail]);
 
   const handleGoogleSignup = async () => {
-    setIsGoogleLoading(true)
+    setIsGoogleLoading(true);
     try {
-      const provider = new GoogleAuthProvider()
-      provider.setCustomParameters({ prompt: 'select_account' })
-      const result = await signInWithPopup(auth, provider)
-      const user = result.user
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+      const user = result.user;
 
-      // Inicializar el perfil en Firestore si es nuevo
-      try {
-        const userRef = doc(db, "users", user.uid)
-        const snap = await getDoc(userRef)
-        if (!snap.exists()) {
-          await setDoc(userRef, {
-            email: user.email,
-            displayName: user.displayName || user.email?.split("@")[0] || "Operario",
-            photoURL: user.photoURL || null,
-            role: "Free User",
-            tenantId: `tenant_${user.uid}`,
-            stripeId: null,
-            subscriptionId: null,
-            subscriptionStatus: null,
-            createdAt: Date.now()
-          })
-        }
-      } catch (firestoreError) {
-        console.warn('Could not initialize user in Firestore:', firestoreError)
-      }
+      // Garantizar Workspace Soberano como Propietario (o unirse si fue invitado)
+      await ensureUserWorkspace(user, { invitedTenantId });
 
-      router.push("/dashboard")
+      router.push("/dashboard");
     } catch (error: any) {
       if (error?.code === 'auth/popup-closed-by-user') {
-        return
+        return;
       }
-      console.error('Error with Google Signup:', error)
-      let message = 'Error al registrarse con Google.'
+      console.error('Error with Google Signup:', error);
+      let message = 'Error al registrarse con Google.';
       if (error?.code === 'auth/operation-not-allowed' || error?.code === 'auth/configuration-not-found') {
-        message = 'El proveedor de Google no está habilitado en Firebase. Ve a Firebase Console > Authentication > Sign-in method y activa "Google".'
+        message = 'El proveedor de Google no está habilitado en Firebase. Ve a Firebase Console > Authentication > Sign-in method y activa "Google".';
       } else if (error instanceof Error) {
-        message = error.message
+        message = error.message;
       }
-      alert(message)
+      alert(message);
     } finally {
-      setIsGoogleLoading(false)
+      setIsGoogleLoading(false);
     }
-  }
+  };
 
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -104,19 +96,8 @@ export default function SignupPage() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password)
       const user = userCredential.user
 
-      // Inicializar el perfil del usuario en Firestore
-      try {
-        await setDoc(doc(db, "users", user.uid), {
-          email: user.email,
-          role: "Free User",
-          stripeId: null,
-          subscriptionId: null,
-          subscriptionStatus: null,
-          createdAt: Date.now()
-        })
-      } catch (firestoreError) {
-        console.warn('Could not initialize user in Firestore:', firestoreError)
-      }
+      // Garantizar Workspace Soberano como Propietario (o unirse si fue invitado)
+      await ensureUserWorkspace(user, { invitedTenantId })
 
       router.push("/dashboard")
     } catch (error: any) {
@@ -231,5 +212,19 @@ export default function SignupPage() {
         </div>
       </footer>
     </div>
-  )
+  );
+}
+
+export default function SignupPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#FFFFFF] text-[#333333] flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#FF6F61]" />
+        </div>
+      }
+    >
+      <SignupContent />
+    </Suspense>
+  );
 }

@@ -15,6 +15,8 @@ import {
   where,
 } from "firebase/firestore";
 import { Tenant, TenantMember, TenantRole, UserProfile } from "@/types/tenant";
+import { ensureUserWorkspace } from "@/lib/workspace-bootstrap";
+
 
 export function useTenant() {
   const { user, loading: authLoading } = useAuth();
@@ -90,10 +92,33 @@ export function useTenant() {
         setMembers(memberList);
 
         // 5. Determinar el rol del usuario en la organización
-        if (tenantData.ownerId === user.uid) {
+        const isUserOwner = tenantData.ownerId === user.uid || targetTenantId === `tenant_${user.uid}`;
+        if (isUserOwner) {
           setCurrentRole("owner");
+          // Si el miembro no está registrado en el subcollection, auto-repararlo en Firestore
+          if (!memberList.some((m) => m.id === user.uid)) {
+            const ownerMember: TenantMember = {
+              id: user.uid,
+              email: user.email || profileData.email || "",
+              displayName: profileData.displayName || "Propietario",
+              role: "owner",
+              status: "active",
+              joinedAt: Date.now(),
+            };
+            setMembers((prev) => [...prev.filter((m) => m.id !== user.uid), ownerMember]);
+            setDoc(doc(db, `tenants/${targetTenantId}/members`, user.uid), {
+              email: ownerMember.email,
+              displayName: ownerMember.displayName,
+              role: "owner",
+              status: "active",
+              joinedAt: ownerMember.joinedAt,
+            }).catch((e) => console.warn("[useTenant] Auto-repair owner member:", e));
+          }
         } else {
-          const myMemberRecord = memberList.find((m) => m.id === user.uid);
+          const cleanUserEmail = (user.email || "").toLowerCase().trim();
+          const myMemberRecord = memberList.find(
+            (m) => m.id === user.uid || (cleanUserEmail && m.email?.toLowerCase().trim() === cleanUserEmail)
+          );
           setCurrentRole(myMemberRecord?.role || "viewer");
         }
       } else {
@@ -105,18 +130,26 @@ export function useTenant() {
           plan: "Free",
           createdAt: Date.now(),
         };
+        const initialMember: TenantMember = {
+          id: user.uid,
+          email: user.email || "",
+          displayName: profileData.displayName || "Propietario",
+          role: "owner",
+          status: "active",
+          joinedAt: Date.now(),
+        };
+
         setTenant(placeholderTenant);
         setCurrentRole("owner");
-        setMembers([
-          {
-            id: user.uid,
-            email: user.email || "",
-            displayName: profileData.displayName || "Propietario",
-            role: "owner",
-            status: "active",
-            joinedAt: Date.now(),
-          },
-        ]);
+        setMembers([initialMember]);
+
+        // Auto-reparar y persistir físicamente en Firestore como Propietario (Self-Healing)
+        ensureUserWorkspace(user, {
+          displayName: profileData.displayName,
+          companyName: placeholderTenant.name,
+        }).catch((err) => {
+          console.warn("[useTenant] Auto-bootstrap silencioso advirtió:", err);
+        });
       }
     } catch (err: any) {
       console.error("Error al cargar datos del Tenant:", err);
@@ -145,7 +178,8 @@ export function useTenant() {
       createdAt: Date.now(),
     };
 
-    const initialMember: Omit<TenantMember, "id"> = {
+    const initialMember: TenantMember = {
+      id: user.uid,
       email: user.email || "",
       displayName: userProfile?.displayName || user.email?.split("@")[0] || "Propietario",
       role: "owner",
@@ -156,22 +190,14 @@ export function useTenant() {
     // Actualización optimista local
     setTenant({ id: targetTenantId, ...newTenantData });
     setCurrentRole("owner");
-    setMembers([{ id: user.uid, ...initialMember }]);
+    setMembers([initialMember]);
 
     try {
-      // 1. Crear documento de Tenant
-      await setDoc(doc(db, "tenants", targetTenantId), newTenantData);
-
-      // 2. Crear membership como propietario
-      await setDoc(doc(db, `tenants/${targetTenantId}/members`, user.uid), initialMember);
-
-      // 3. Vincular al perfil de usuario
-      await updateDoc(doc(db, "users", user.uid), {
-        tenantId: targetTenantId,
-        updatedAt: Date.now(),
+      await ensureUserWorkspace(user, {
+        companyName: companyName.trim() || "Mi Organización",
+        cif: cif?.trim() || "",
+        displayName: initialMember.displayName,
       });
-
-      localStorage.setItem("gorila_active_tenant", targetTenantId);
     } catch (e: any) {
       console.error("Error en bootstrap del Tenant:", e);
       throw new Error(e?.message || "Error al inicializar la organización");

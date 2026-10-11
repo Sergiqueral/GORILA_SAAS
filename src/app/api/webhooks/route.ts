@@ -107,8 +107,15 @@ export async function POST(req: NextRequest) {
             updatedAt: Date.now(),
           };
 
+          const inferredOwnerId = userId || (tenantId.startsWith('tenant_') ? tenantId.replace('tenant_', '') : undefined);
+          const tenantSnap = await tenantRef.get();
+          const tenantData = tenantSnap.exists ? tenantSnap.data() : null;
+
           await tenantRef.set(
             {
+              ...(tenantData?.name ? {} : { name: 'Mi Organización' }),
+              ...(tenantData?.ownerId ? {} : (inferredOwnerId ? { ownerId: inferredOwnerId } : {})),
+              ...(tenantData?.createdAt ? {} : { createdAt: Date.now() }),
               stripe_customer_id: customerId,
               stripe_subscription_id: subscriptionId,
               stripeCustomerId: customerId,
@@ -119,6 +126,22 @@ export async function POST(req: NextRequest) {
             },
             { merge: true }
           );
+
+          if (inferredOwnerId) {
+            const memberRef = tenantRef.collection('members').doc(inferredOwnerId);
+            const memberSnap = await memberRef.get();
+            if (!memberSnap.exists) {
+              await memberRef.set(
+                {
+                  role: 'owner',
+                  status: 'active',
+                  joinedAt: Date.now(),
+                },
+                { merge: true }
+              );
+            }
+          }
+
           console.log(
             `[FinOps Soberanía] Espacio de trabajo ${tenantId} blindado y vinculado con Stripe (Seats: ${additionalSeats})`
           );
